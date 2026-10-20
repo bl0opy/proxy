@@ -6,6 +6,10 @@ APP_DIRS = [Path("/Applications"), Path("/System/Applications"),
 
 
 @cache
+def app_paths() -> dict[str, Path]:
+    found = {p.stem: p for d in reversed(APP_DIRS) if d.is_dir() for p in d.glob("*.app")}
+    return dict(sorted(found.items(), key=lambda kv: kv[0].lower()))
+
+
 def installed_apps() -> tuple[str, ...]:
-    names = {p.stem for d in APP_DIRS if d.is_dir() for p in d.glob("*.app")}
-    return tuple(sorted(names, key=str.lower))
+    return tuple(app_paths())
