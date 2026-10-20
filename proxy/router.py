@@ -19,6 +19,7 @@ class Route:
     ms: float
     slots: dict = field(default_factory=dict)
     probabilities: dict = field(default_factory=dict)
+    slot_confidence: dict = field(default_factory=dict)
 
     @property
     def confident(self) -> bool:
@@ -60,15 +61,18 @@ class Router:
         start = time.perf_counter()
         if not selection and (hit := fast_route(transcript)):
             intent = hit.pop("intent")
-            return Route(intent, 1.0, "fastpath", (time.perf_counter() - start) * 1000, hit)
+            return Route(intent, 1.0, "fastpath", (time.perf_counter() - start) * 1000, hit,
+                         slot_confidence={k: 1.0 for k in hit})
 
         answers = self._jev.ask(build_state(transcript, app, selection), self._questions)["answers"]
         top = answers["intent"]
         intent = top["choice"]
-        slots = {}
+        slots, slot_confidence = {}, {}
         if slot := SLOT_FOR_INTENT.get(intent):
             choice = answers[slot]["choice"]
             if choice != NO_APP:
                 slots[slot] = choice
+                slot_confidence[slot] = answers[slot]["probabilities"][choice]
         ms = (time.perf_counter() - start) * 1000
-        return Route(intent, top["probabilities"][intent], "jev", ms, slots, top["probabilities"])
+        return Route(intent, top["probabilities"][intent], "jev", ms, slots, top["probabilities"],
+                     slot_confidence)

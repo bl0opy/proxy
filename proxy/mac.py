@@ -1,3 +1,5 @@
+import os
+import subprocess
 import time
 from dataclasses import dataclass
 from functools import cache
@@ -28,6 +30,18 @@ def accessibility_trusted() -> bool:
 
 def request_accessibility():
     AX.AXIsProcessTrustedWithOptions({AX.kAXTrustedCheckOptionPrompt: True})
+
+
+@cache
+def host_app_pid() -> int | None:
+    pid = os.getpid()
+    while pid > 1:
+        app = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if app is not None and app.activationPolicy() == AppKit.NSApplicationActivationPolicyRegular:
+            return pid
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+        pid = int(out.stdout.strip() or 1)
+    return None
 
 
 def frontmost_app():

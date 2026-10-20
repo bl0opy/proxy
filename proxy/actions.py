@@ -1,3 +1,4 @@
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -5,7 +6,7 @@ from typing import Callable
 from . import mac
 from .apps import app_paths
 from .extract import search_target, text_to_type
-from .router import Route
+from .router import CONFIDENT, Route
 
 MEDIA = {
     "play": ("play/pause", lambda: mac.media_key(mac.NX_PLAY)),
@@ -26,6 +27,10 @@ WINDOW = {
     "close_all": mac.close_all_windows,
     "fullscreen": mac.toggle_fullscreen,
 }
+
+DESTRUCTIVE = {"close_window", "close_all"}
+DESTRUCTIVE_CONFIDENCE = 0.9
+CLOSE_VERB = re.compile(r"\b(close|quit|shut|kill)\b", re.I)
 
 SYSTEM_TWO = {"rewrite_selection", "calendar_reminder", "ask_question", "escalate_complex"}
 
@@ -70,7 +75,16 @@ def plan_window(route: Route, transcript: str, ctx: mac.Context) -> Plan:
     action = route.slots.get("window_action")
     if action not in WINDOW:
         return "unknown window action", None
-    return f"{action.replace('_', ' ')} ({ctx.app or 'front window'})", WINDOW[action]
+    label = f"{action.replace('_', ' ')} ({ctx.app or 'front window'})"
+    if action in DESTRUCTIVE:
+        if not CLOSE_VERB.search(transcript):
+            return f"refusing to {label}: you didn't say close", None
+        if min(route.confidence, route.slot_confidence.get("window_action", 0)) < DESTRUCTIVE_CONFIDENCE:
+            return f"refusing to {label}: not sure enough", None
+    front = mac.frontmost_app()
+    if front is not None and front.processIdentifier() == mac.host_app_pid():
+        return f"refusing to {label}: that's the app running proxy (use --delay)", None
+    return label, WINDOW[action]
 
 
 PLANNERS = {
@@ -93,6 +107,9 @@ def plan(route: Route, transcript: str, ctx: mac.Context) -> Plan:
 def perform(route: Route, transcript: str, ctx: mac.Context, dry_run: bool = False) -> Outcome:
     if not route.confident:
         return Outcome(False, f"unsure ({route.intent} at {route.confidence:.2f}), not acting")
+    weak = {k: v for k, v in route.slot_confidence.items() if v < CONFIDENT}
+    if weak:
+        return Outcome(False, f"unsure about {', '.join(f'{k} at {v:.2f}' for k, v in weak.items())}, not acting")
     description, run = plan(route, transcript, ctx)
     if run is None:
         return Outcome(False, description)
