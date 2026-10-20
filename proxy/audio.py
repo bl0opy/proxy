@@ -19,6 +19,7 @@ class Recorder:
         self._lock = threading.Lock()
         self._preroll = deque(maxlen=int(PREROLL_SECONDS * SAMPLE_RATE / BLOCK) + 1)
         self._chunks: list[np.ndarray] | None = None
+        self.level = 0.0
         self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
                                       blocksize=BLOCK, device=device, callback=self._on_audio)
 
@@ -31,6 +32,7 @@ class Recorder:
 
     def _on_audio(self, data, frames, time_info, status):
         chunk = data[:, 0].copy()
+        self.level = float(np.sqrt(np.mean(chunk * chunk)))
         with self._lock:
             if self._chunks is None:
                 self._preroll.append(chunk)

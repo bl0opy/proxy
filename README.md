@@ -31,6 +31,12 @@ syllable isn't clipped; only audio while the key is held is kept. parakeet-tdt-0
 app and selection are captured when the key goes down, so the action lands where you were.
 Release to done is ~200–350 ms (stt 65–170, Jev ~130, fast path 0).
 
+A floating pill at the top of the screen shows what's happening: a red dot and a
+dot-matrix level meter while you hold the key, the transcript while it thinks, then the
+action and total time. White dot = done, amber = unsure or refused (not acted on),
+red = failed. It never takes focus or clicks, so the app you spoke into stays active.
+`python -m proxy.overlay` plays a short demo.
+
 ## Permissions
 
 Whatever runs proxy (your terminal) needs, in System Settings → Privacy & Security:
