@@ -23,8 +23,20 @@ Each confident route becomes one action, run in-process through PyObjC:
 | `window_management` | tile left/right/maximize, minimize, fullscreen, close via the Accessibility API |
 | `rewrite_selection`, `calendar_reminder`, `ask_question`, `escalate_complex` | not built yet (System 2) |
 
-Typing, windows, media keys and reading the selection need Accessibility permission for
-whatever runs proxy (your terminal): `python -m proxy --request-access`.
+## Voice
+
+Hold right ⌥, speak, let go. The mic stays open with a 300 ms pre-roll so the first
+syllable isn't clipped; only audio while the key is held is kept. parakeet-tdt-0.6b-v3
+(MLX) transcribes on device, then the router and action layer take over. The frontmost
+app and selection are captured when the key goes down, so the action lands where you were.
+Release to done is ~200–350 ms (stt 65–170, Jev ~130, fast path 0).
+
+## Permissions
+
+Whatever runs proxy (your terminal) needs, in System Settings → Privacy & Security:
+**Microphone** (voice), **Input Monitoring** (the hotkey) and **Accessibility** (typing,
+windows, media keys, reading the selection). `python -m proxy --request-access` raises the
+prompts.
 
 ```bash
 pyenv local 3.11.6 && python -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -32,6 +44,8 @@ echo "JEV_API_KEY=..." > .env
 .venv/bin/python -m proxy "open calculator"
 .venv/bin/python -m proxy "put this window on the left half" --delay 3   # switch apps first
 .venv/bin/python -m proxy --dry-run                                       # interactive, plan only
+.venv/bin/python -m proxy --listen                                        # push-to-talk
+.venv/bin/python -m proxy --wav clip.aiff --dry-run                       # a recording instead of the mic
 ```
 
 ## Benchmarks

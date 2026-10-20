@@ -1,9 +1,14 @@
 import argparse
+import subprocess
+import tempfile
 import time
+import wave
+from pathlib import Path
 
 from . import mac
 from .actions import perform
 from .env import load_env
+from .hotkey import KEYS, listen_access, request_listen_access
 from .router import Router
 
 
@@ -21,6 +26,33 @@ def handle(router: Router, transcript: str, args) -> None:
           + (f"  ({outcome.ms:.0f} ms)" if outcome.ms else ""))
 
 
+def read_wav(path: str):
+    import numpy as np
+    from .stt import SAMPLE_RATE
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "in.wav"
+        subprocess.run(["afconvert", "-f", "WAVE", "-d", f"LEI16@{SAMPLE_RATE}", "-c", "1", path, str(out)],
+                       check=True)
+        with wave.open(str(out)) as w:
+            pcm = w.readframes(w.getnframes())
+    return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def transcribe_file(router: Router, path: str, args) -> None:
+    from .stt import Transcriber
+    from .voice import Utterance, handle_utterance
+    from PyObjCTools import AppHelper
+    transcriber = Transcriber()
+    start = time.perf_counter()
+    transcriber.load()
+    print(f"  model loaded in {(time.perf_counter() - start) * 1000:.0f} ms")
+    ctx = mac.capture_context()
+    ctx.app = args.app or ctx.app
+    ctx.selection = args.selection or ctx.selection
+    AppHelper.callAfter = lambda fn: fn()
+    handle_utterance(transcriber, router, Utterance(read_wav(path), ctx, time.perf_counter()), args.dry_run)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="proxy")
     parser.add_argument("transcript", nargs="?")
@@ -30,11 +62,16 @@ def main():
     parser.add_argument("--delay", type=float, default=0,
                         help="seconds to wait before acting, to switch to the target app")
     parser.add_argument("--request-access", action="store_true",
-                        help="show the macOS Accessibility permission prompt")
+                        help="show the macOS Accessibility and Input Monitoring prompts")
+    parser.add_argument("--listen", action="store_true", help="push-to-talk voice mode")
+    parser.add_argument("--key", default="right_option", choices=sorted(KEYS),
+                        help="push-to-talk key (default right_option)")
+    parser.add_argument("--wav", help="transcribe an audio file instead of the mic")
     args = parser.parse_args()
 
     if args.request_access:
         mac.request_accessibility()
+        request_listen_access()
         return
     if not mac.accessibility_trusted():
         print("note: no Accessibility permission — typing, windows, media keys and selection "
@@ -43,6 +80,16 @@ def main():
     load_env()
     router = Router()
     router.warm()
+    if args.listen:
+        if not listen_access():
+            print("note: no Input Monitoring permission — the hotkey can't be heard. "
+                  "Run with --request-access.")
+        from .voice import Listener
+        Listener(router, args.key, args.dry_run).run(args.key.replace("_", " "))
+        return
+    if args.wav:
+        transcribe_file(router, args.wav, args)
+        return
     if args.transcript:
         time.sleep(args.delay)
         handle(router, args.transcript, args)
