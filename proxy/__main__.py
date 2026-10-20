@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import tempfile
 import time
@@ -67,12 +68,16 @@ def main():
     parser.add_argument("--key", default="right_option", choices=sorted(KEYS),
                         help="push-to-talk key (default right_option)")
     parser.add_argument("--wav", help="transcribe an audio file instead of the mic")
+    parser.add_argument("--menu-bar", action="store_true", help="show a menu bar item (on in Proxy.app)")
     args = parser.parse_args()
+    in_app = os.environ.get("PROXY_APP") == "1"
 
     if args.request_access:
         mac.request_accessibility()
         request_listen_access()
         return
+    if in_app and not mac.accessibility_trusted():
+        mac.request_accessibility()
     if not mac.accessibility_trusted():
         print("note: no Accessibility permission — typing, windows, media keys and selection "
               "won't work. Run with --request-access.")
@@ -81,11 +86,15 @@ def main():
     router = Router()
     router.warm()
     if args.listen:
+        if in_app and not listen_access():
+            request_listen_access()
         if not listen_access():
             print("note: no Input Monitoring permission — the hotkey can't be heard. "
                   "Run with --request-access.")
         from .voice import Listener
-        Listener(router, args.key, args.dry_run).run(args.key.replace("_", " "))
+        label = {"right_option": "right ⌥", "right_command": "right ⌘",
+                 "right_control": "right ⌃", "fn": "fn"}[args.key]
+        Listener(router, args.key, args.dry_run).run(label, menu_bar=in_app or args.menu_bar)
         return
     if args.wav:
         transcribe_file(router, args.wav, args)

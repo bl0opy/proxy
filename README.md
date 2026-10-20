@@ -37,9 +37,25 @@ action and total time. White dot = done, amber = unsure or refused (not acted on
 red = failed. It never takes focus or clicks, so the app you spoke into stays active.
 `python -m proxy.overlay` plays a short demo.
 
+## Proxy.app
+
+```bash
+./scripts/build_app.sh        # → build/Proxy.app
+open build/Proxy.app
+```
+
+A menu bar app (no Dock icon, no terminal). The bundle's executable is a tiny C launcher
+that spawns the venv's Python as a child, so macOS grants permissions to **Proxy**, not to
+Terminal. Python code changes need no rebuild: the app runs the project in place. Output
+goes to `~/Library/Logs/Proxy/proxy.log`. The menu bar item shows missing permissions,
+toggles dry run, opens the log, restarts, and quits.
+
+Rebuilding re-signs the bundle ad hoc, which can make macOS forget its permissions; only
+rebuild when `app/` changes.
+
 ## Permissions
 
-Whatever runs proxy (your terminal) needs, in System Settings → Privacy & Security:
+Proxy.app (or the terminal, when run from one) needs, in System Settings → Privacy & Security:
 **Microphone** (voice), **Input Monitoring** (the hotkey) and **Accessibility** (typing,
 windows, media keys, reading the selection). `python -m proxy --request-access` raises the
 prompts.

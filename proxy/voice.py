@@ -13,6 +13,7 @@ from .audio import Recorder
 from .hotkey import HoldKey
 from .overlay import Overlay
 from .router import Router
+from .statusbar import StatusBar
 from .stt import SAMPLE_RATE, Transcriber
 
 MIN_SECONDS = 0.25
@@ -71,6 +72,7 @@ class Listener:
         self._recorder = Recorder(device)
         self._hotkey = HoldKey(key, self._pressed, self._released)
         self._overlay: Overlay | None = None
+        self._statusbar: StatusBar | None = None
         self._utterances: queue.Queue[Utterance] = queue.Queue()
         self._ctx = mac.Context()
         self._pressed_at = 0.0
@@ -81,10 +83,14 @@ class Listener:
         self._recorder.start()
         self._ctx = mac.capture_context()
         self._overlay.listening()
+        if self._statusbar:
+            self._statusbar.listening(True)
 
     def _released(self):
         samples = self._recorder.stop()
         now = time.perf_counter()
+        if self._statusbar:
+            self._statusbar.listening(False)
         if now - self._pressed_at < MIN_SECONDS:
             self._overlay.result("", "too short", "muted")
             return
@@ -103,10 +109,15 @@ class Listener:
                 print(f"  error: {type(e).__name__}: {e}")
                 AppHelper.callAfter(self._overlay.result, "", f"error · {type(e).__name__}", "error")
 
-    def run(self, key_label: str):
+    def _set_dry_run(self, value: bool):
+        self._dry_run = value
+
+    def run(self, key_label: str, menu_bar: bool = False):
         app = AppKit.NSApplication.sharedApplication()
         app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
         self._overlay = Overlay(lambda: self._recorder.level)
+        if menu_bar:
+            self._statusbar = StatusBar(key_label, lambda: self._dry_run, self._set_dry_run)
         threading.Thread(target=self._worker, daemon=True, name="stt").start()
         print("loading speech model…")
         self._ready.wait()
