@@ -27,9 +27,22 @@ Same 17 cases, 10 intents. "First-seen" = prompt never sent before (what a real 
 | Laya 421M, MPS, criteria with descriptions | ~54 ms | 5/17 | probabilities flat (~0.3) |
 | Laya 421M, MPS, bare labels | 39 ms | 10/17 | wrong at 0.96 confidence on "go to github dot com" |
 | Laya typed-decisions 421M | ~56 ms | 6/17 | |
-| Jev 1.14 API | not run | — | needs `TYPESAFE_API_KEY` |
+| Jev 1.14 API | see router eval below | — | |
 
 - Laya is fast enough but not accurate enough to be the router, and its confidence
   does not reliably flag its own mistakes, so gating on it lets wrong actions through.
 - Jev price (docs.typesafe.ai/models, 2026-10-20): $0.042 per million input tokens,
   output free. A ~450-token decision costs ~$0.000019; 1,000 commands/day ≈ $0.57/month.
+
+## Jev router — `bench/router_eval.py`
+
+29 cases, intent + slots (app / media action / window action) in one request with 4 questions.
+
+| | median | p90 | correct | confident & wrong |
+|---|---|---|---|---|
+| Jev 1.14, every case | 134–146 ms | 165–189 ms | 28/29 | 0 |
+| fast path + Jev | 141 ms | 173 ms | 28/29 | 0 |
+
+- The one miss ("hey sam just checking in…" in Messages) is always under the 0.7 gate.
+- Request with the installed-app list (~120 apps) is 1802 tokens = $0.000076; without it 852.
+  Latency is the same either way, so the app question rides along on every call.

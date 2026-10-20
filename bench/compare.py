@@ -4,9 +4,14 @@ import os
 import statistics
 import string
 import time
+import sys
 import urllib.request
+from pathlib import Path
 
 from cases import CASES, INTENTS, make_context
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from proxy.env import load_env
 
 INSTRUCTIONS = "What the user wants the voice assistant to do."
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
@@ -46,7 +51,7 @@ class Jev:
     def __init__(self, model: str):
         self.name = f"jev {model} (api)"
         self._model = model
-        self._key = os.environ["TYPESAFE_API_KEY"]
+        self._key = os.environ["JEV_API_KEY"]
         self.input_tokens = []
 
     def classify(self, context: str) -> dict:
@@ -103,6 +108,7 @@ def main():
                         default=["laya", "laya-labels", "laya-td", "nimble", "jev"])
     parser.add_argument("--rounds", type=int, default=3)
     args = parser.parse_args()
+    load_env()
 
     factories = {
         "laya": lambda: Laya("convaiinnovations/laya"),
@@ -112,8 +118,8 @@ def main():
         "jev": lambda: Jev("jev-1.14.0"),
     }
     for name in args.backends:
-        if name == "jev" and "TYPESAFE_API_KEY" not in os.environ:
-            print("\n## jev: skipped, TYPESAFE_API_KEY not set")
+        if name == "jev" and "JEV_API_KEY" not in os.environ:
+            print("\n## jev: skipped, JEV_API_KEY not set")
             continue
         try:
             bench(factories[name](), args.rounds)
