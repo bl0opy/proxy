@@ -11,9 +11,11 @@ MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/gesture_recognizer
              "gesture_recognizer/float16/latest/gesture_recognizer.task")
 
 MIN_SIZE = 0.07
-SWIPE_WINDOW = 0.35
+SWIPE_WINDOW = 0.45
 SWIPE_DISTANCE = 0.16
 AXIS_RATIO = 1.6
+RETURN_LOOKBACK = 0.6
+RETURN_FRACTION = 0.6
 COOLDOWN = 0.7
 ENTRY_SETTLE = 0.25
 DOWN_CONFIRM = 0.2
@@ -24,9 +26,8 @@ LOST_SECONDS = 0.25
 IDLE_AFTER = 2.0
 IDLE_EVERY = 5
 
-FINGERS = ((8, 6), (12, 10), (16, 14), (20, 18))
+INDEX, MIDDLE, RING, PINKY = (8, 6), (12, 10), (16, 14), (20, 18)
 WRIST, MIDDLE_KNUCKLE = 0, 9
-PALM = (0, 5, 9, 13, 17)
 
 
 @dataclass
@@ -34,7 +35,11 @@ class Hand:
     x: float
     y: float
     size: float
-    open: bool
+    pose: str
+
+    @property
+    def open(self) -> bool:
+        return self.pose == "open"
 
 
 @dataclass
@@ -42,23 +47,36 @@ class Sample:
     t: float
     x: float
     y: float
-    open: bool
+    pose: str
 
 
 def hand_from_landmarks(points) -> Hand:
+    """Position is the midpoint of the index and middle fingertips. Pose is "open"
+    (four fingers out), "two" (index and middle out, ring and pinky curled) or "other"."""
     def dist(a, b):
         return math.hypot(points[a].x - points[b].x, points[a].y - points[b].y)
 
-    extended = sum(dist(WRIST, tip) > 1.1 * dist(WRIST, pip) for tip, pip in FINGERS)
-    x = sum(points[i].x for i in PALM) / len(PALM)
-    y = sum(points[i].y for i in PALM) / len(PALM)
-    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), extended >= 4)
+    def extended(finger):
+        tip, pip = finger
+        return dist(WRIST, tip) > 1.1 * dist(WRIST, pip)
+
+    index, middle, ring, pinky = map(extended, (INDEX, MIDDLE, RING, PINKY))
+    if index and middle and ring and pinky:
+        pose = "open"
+    elif index and middle and not ring and not pinky:
+        pose = "two"
+    else:
+        pose = "other"
+    x = (points[INDEX[0]].x + points[MIDDLE[0]].x) / 2
+    y = (points[INDEX[0]].y + points[MIDDLE[0]].y) / 2
+    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), pose)
 
 
 class Detector:
     """Turns a stream of hand positions (mirrored, 0–1, y down) into events:
-    palm_start / palm_end for a held open palm, and swipe_left/right/up/down.
-    A swipe during a palm hold ends it without a palm_end. Pure logic, no camera."""
+    palm_start / palm_end for a held open palm, and swipe_left/right/up/down for a
+    two-finger swipe. A swipe during a palm hold ends it without a palm_end, except
+    a downward one, which is read as lowering the hand. Pure logic, no camera."""
 
     def __init__(self):
         self.track: deque[Sample] = deque()
@@ -79,10 +97,10 @@ class Detector:
                 self.appeared_at = t
                 self.track.clear()
             self.last_seen = t
-            self.track.append(Sample(t, hand.x, hand.y, hand.open))
+            self.track.append(Sample(t, hand.x, hand.y, hand.pose))
             if hand.open:
                 self.last_open = t
-        while self.track and t - self.track[0].t > SWIPE_WINDOW:
+        while self.track and t - self.track[0].t > SWIPE_WINDOW + RETURN_LOOKBACK:
             self.track.popleft()
 
         if self.pending_down is not None:
@@ -138,17 +156,30 @@ class Detector:
     def _swipe(self, t: float) -> str | None:
         if t < self.cooldown_until:
             return None
-        since = max(self.appeared_at + ENTRY_SETTLE, self.cooldown_until)
-        samples = [s for s in self.track if s.t >= since]
-        if len(samples) < 3 or not any(s.open for s in samples[: len(samples) // 2 + 1]):
+        since = max(self.appeared_at + ENTRY_SETTLE, self.cooldown_until, t - SWIPE_WINDOW)
+        window = [s for s in self.track if s.t >= since]
+        if len(window) < 3 or sum(s.pose == "two" for s in window) * 2 < len(window):
             return None
-        dx = samples[-1].x - samples[0].x
-        dy = samples[-1].y - samples[0].y
+        dx = window[-1].x - window[0].x
+        dy = window[-1].y - window[0].y
         if abs(dx) >= SWIPE_DISTANCE and abs(dx) >= AXIS_RATIO * abs(dy):
-            return "swipe_right" if dx > 0 else "swipe_left"
-        if abs(dy) >= SWIPE_DISTANCE and abs(dy) >= AXIS_RATIO * abs(dx):
-            return "swipe_down" if dy > 0 else "swipe_up"
-        return None
+            axis, move, swipe = "x", dx, "swipe_right" if dx > 0 else "swipe_left"
+        elif abs(dy) >= SWIPE_DISTANCE and abs(dy) >= AXIS_RATIO * abs(dx):
+            axis, move, swipe = "y", dy, "swipe_down" if dy > 0 else "swipe_up"
+        else:
+            return None
+        return None if self._returning(window[0], axis, move) else swipe
+
+    def _returning(self, start: Sample, axis: str, move: float) -> bool:
+        """True when the hand just travelled the other way: this is the stroke back
+        from a swipe that didn't fire, not a new one."""
+        before = [s for s in self.track if start.t - RETURN_LOOKBACK <= s.t < start.t]
+        if not before:
+            return False
+        values = [getattr(s, axis) for s in before]
+        here = getattr(start, axis)
+        back = here - min(values) if move < 0 else max(values) - here
+        return back >= RETURN_FRACTION * SWIPE_DISTANCE
 
 
 def ensure_model():
@@ -262,31 +293,54 @@ class Camera:
 
 
 def debug():
+    import json
     import queue
 
     import cv2
 
+    record = Path("gesture-log.jsonl").open("w")
     frames: queue.Queue = queue.Queue(maxsize=1)
     log: deque[str] = deque(maxlen=6)
+    flash = {"text": "", "until": 0.0}
+    stamps: deque[float] = deque(maxlen=30)
 
     def on_event(event: str):
         stamp = time.strftime("%H:%M:%S")
         log.appendleft(f"{stamp} {event}")
-        print(f"{stamp} {event}")
+        flash.update(text=event.replace("_", " ").upper(), until=time.monotonic() + 0.8)
+        record.write(json.dumps({"t": time.monotonic(), "event": event}) + "\n")
+        print(f"{stamp} {event}", flush=True)
 
     def on_frame(frame, result, hand, detector):
+        now = time.monotonic()
+        stamps.append(now)
+        fps = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 else 0
+        record.write(json.dumps({"t": now, "hand": hand and [round(hand.x, 4), round(hand.y, 4),
+                                                             round(hand.size, 4), hand.pose]}) + "\n")
         h, w = frame.shape[:2]
         for points in result.hand_landmarks:
             for p in points:
                 cv2.circle(frame, (int(p.x * w), int(p.y * h)), 3, (255, 255, 255), -1)
+        track = list(detector.track)
+        for a, b in zip(track, track[1:]):
+            cv2.line(frame, (int(a.x * w), int(a.y * h)), (int(b.x * w), int(b.y * h)), (0, 200, 255), 2)
+        dx = track[-1].x - track[0].x if track else 0
+        dy = track[-1].y - track[0].y if track else 0
+        cv2.putText(frame, f"{fps:4.1f} fps  window dx {dx:+.2f} dy {dy:+.2f} (need {SWIPE_DISTANCE})",
+                    (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         if hand:
-            color = (0, 0, 255) if detector.palm else (0, 200, 0) if hand.open else (160, 160, 160)
+            color = (0, 0, 255) if detector.palm else {"open": (0, 200, 0), "two": (255, 160, 0)}.get(
+                hand.pose, (160, 160, 160))
             cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 10, color, 2)
             label = result.gestures[0][0].category_name if result.gestures else ""
-            cv2.putText(frame, f"size {hand.size:.2f} open {hand.open} {label}", (10, 24),
+            cv2.putText(frame, f"size {hand.size:.2f} {hand.pose} {label}", (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         if detector.palm:
-            cv2.putText(frame, "LISTENING", (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            cv2.putText(frame, "LISTENING", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        if now < flash["until"]:
+            size = cv2.getTextSize(flash["text"], cv2.FONT_HERSHEY_SIMPLEX, 1.6, 4)[0]
+            cv2.putText(frame, flash["text"], ((w - size[0]) // 2, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.6,
+                        (0, 255, 255), 4)
         for i, line in enumerate(log):
             cv2.putText(frame, line, (10, h - 16 - i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         if frames.full():
@@ -295,7 +349,7 @@ def debug():
 
     camera = Camera(on_event, on_frame=on_frame)
     camera.start()
-    print("gesture debug — q to quit")
+    print("gesture debug — q to quit · recording to gesture-log.jsonl", flush=True)
     try:
         while camera.running or not frames.empty():
             try:
@@ -308,6 +362,7 @@ def debug():
     finally:
         camera.stop()
         cv2.destroyAllWindows()
+        record.close()
 
 
 if __name__ == "__main__":

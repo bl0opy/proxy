@@ -13,13 +13,13 @@ def run(detector: Detector, path, t0: float = 0.0) -> tuple[list[str], float]:
     return events, t
 
 
-def hold(x, y, seconds, open_=True):
-    return [Hand(x, y, 0.15, open_)] * int(seconds * FPS)
+def hold(x, y, seconds, pose="open"):
+    return [Hand(x, y, 0.15, pose)] * int(seconds * FPS)
 
 
-def move(x0, y0, x1, y1, seconds, open_=True):
+def move(x0, y0, x1, y1, seconds, pose="two"):
     n = int(seconds * FPS)
-    return [Hand(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, 0.15, open_) for i in range(n + 1)]
+    return [Hand(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, 0.15, pose) for i in range(n + 1)]
 
 
 def gone(seconds):
@@ -31,25 +31,25 @@ class DetectorTest(unittest.TestCase):
         d = Detector()
         events, t = run(d, hold(0.5, 0.4, 0.8))
         self.assertEqual(events, ["palm_start"])
-        events, _ = run(d, move(0.5, 0.4, 0.5, 0.95, 0.2) + gone(0.5), t)
+        events, _ = run(d, move(0.5, 0.4, 0.5, 0.95, 0.2, "open") + gone(0.5), t)
         self.assertEqual(events, ["palm_end"])
 
     def test_swipes(self):
         for path, expected in [((0.3, 0.4, 0.7, 0.4), "swipe_right"), ((0.7, 0.4, 0.3, 0.4), "swipe_left"),
                                ((0.5, 0.6, 0.5, 0.2), "swipe_up")]:
             d = Detector()
-            _, t = run(d, hold(*path[:2], 0.3))
-            events, _ = run(d, move(*path, 0.2) + hold(*path[2:], 0.1), t)
+            _, t = run(d, hold(*path[:2], 0.3, "two"))
+            events, _ = run(d, move(*path, 0.2) + hold(*path[2:], 0.1, "two"), t)
             self.assertEqual(events, [expected], expected)
 
     def test_swipe_down_needs_hand_to_stay(self):
         d = Detector()
-        _, t = run(d, hold(0.5, 0.3, 0.3))
-        events, _ = run(d, move(0.5, 0.3, 0.5, 0.7, 0.2) + hold(0.5, 0.7, 0.3), t)
+        _, t = run(d, hold(0.5, 0.3, 0.3, "two"))
+        events, _ = run(d, move(0.5, 0.3, 0.5, 0.7, 0.2) + hold(0.5, 0.7, 0.3, "two"), t)
         self.assertEqual(events, ["swipe_down"])
 
         d = Detector()
-        _, t = run(d, hold(0.5, 0.3, 0.3))
+        _, t = run(d, hold(0.5, 0.3, 0.3, "two"))
         events, _ = run(d, move(0.5, 0.3, 0.5, 0.95, 0.2) + gone(0.5), t)
         self.assertEqual(events, [])
 
@@ -62,25 +62,37 @@ class DetectorTest(unittest.TestCase):
         d = Detector()
         events, t = run(d, hold(0.5, 0.4, 0.8))
         self.assertEqual(events, ["palm_start"])
-        events, t = run(d, move(0.5, 0.4, 0.5, 0.1, 0.2) + hold(0.5, 0.1, 1.0), t)
+        events, t = run(d, move(0.5, 0.4, 0.5, 0.1, 0.2) + hold(0.5, 0.1, 1.0, "two"), t)
         self.assertEqual(events, ["swipe_up"])
-        events, t = run(d, hold(0.5, 0.1, 0.5, open_=False) + hold(0.5, 0.1, 0.8), t)
+        events, t = run(d, hold(0.5, 0.1, 0.5, "other") + hold(0.5, 0.1, 0.8), t)
         self.assertEqual(events, ["palm_start"])
 
     def test_return_stroke_is_ignored(self):
         d = Detector()
-        _, t = run(d, hold(0.3, 0.4, 0.3))
-        events, _ = run(d, move(0.3, 0.4, 0.7, 0.4, 0.2) + move(0.7, 0.4, 0.3, 0.4, 0.3) + hold(0.3, 0.4, 0.2), t)
+        _, t = run(d, hold(0.3, 0.4, 0.3, "two"))
+        events, _ = run(d, move(0.3, 0.4, 0.7, 0.4, 0.2) + move(0.7, 0.4, 0.3, 0.4, 0.3) + hold(0.3, 0.4, 0.2, "two"), t)
         self.assertEqual(events, ["swipe_right"])
 
     def test_closed_hand_does_not_swipe_or_listen(self):
         d = Detector()
-        events, _ = run(d, hold(0.3, 0.4, 0.8, False) + move(0.3, 0.4, 0.7, 0.4, 0.2, False))
+        events, _ = run(d, hold(0.3, 0.4, 0.8, "other") + move(0.3, 0.4, 0.7, 0.4, 0.2, "other"))
         self.assertEqual(events, [])
+
+    def test_open_hand_does_not_swipe(self):
+        d = Detector()
+        events, _ = run(d, hold(0.3, 0.4, 0.2) + move(0.3, 0.4, 0.7, 0.4, 0.2, "open"))
+        self.assertEqual(events, [])
+
+    def test_return_from_slow_down_is_not_swipe_up(self):
+        d = Detector()
+        _, t = run(d, hold(0.6, 0.6, 0.3, "two"))
+        events, _ = run(d, move(0.6, 0.6, 0.6, 0.82, 0.6) + move(0.6, 0.82, 0.6, 0.6, 0.15)
+                        + hold(0.6, 0.6, 0.3, "two"), t)
+        self.assertNotIn("swipe_up", events)
 
     def test_small_background_hand_is_ignored(self):
         d = Detector()
-        events, _ = run(d, [Hand(0.5, 0.4, 0.03, True)] * 30)
+        events, _ = run(d, [Hand(0.5, 0.4, 0.03, "open")] * 30)
         self.assertEqual(events, [])
 
 

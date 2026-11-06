@@ -45,10 +45,14 @@ frame when no hand has been seen for 2 s).
 | gesture | does |
 |---|---|
 | hold an open palm still ~0.35 s | start listening (same as holding right ⌥); lower the hand or close it to send |
-| swipe up while listening | send, and open the app that best fits what you said |
-| swipe up | open the app staged by your last fuzzy request; otherwise Mission Control |
-| swipe left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
-| swipe down | minimize the front window |
+| two-finger swipe up while listening | send, and open the app that best fits what you said |
+| two-finger swipe up | open the app staged by your last fuzzy request; otherwise Mission Control |
+| two-finger swipe left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
+| two-finger swipe down | minimize the front window |
+
+Swipes use index and middle finger out, ring and pinky curled, tracked at the
+fingertips; an open hand never swipes, so raising a palm to talk can't switch desktops.
+A stroke that comes straight back from an unfinished one in the other direction is ignored.
 
 Clear commands still run as soon as you stop talking. Requests that aren't commands but
 point at an app ("time to write some lyrics") are staged instead: the pill shows
@@ -61,7 +65,8 @@ Music is paused, or play/pause is sent when a browser is the one playing. It com
 when the request is routed, unless the request was itself play or pause.
 
 `python -m proxy.gesture` opens a debug view with the hand points and detected events,
-for tuning the thresholds at the top of `proxy/gesture.py`. `--no-gestures` turns the
+for tuning the thresholds at the top of `proxy/gesture.py`; it records every frame to
+`gesture-log.jsonl`. `--no-gestures` turns the
 camera off; the menu bar item toggles it. The model (`models/gesture_recognizer.task`,
 8 MB) downloads on first run.
 
