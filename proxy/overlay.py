@@ -10,7 +10,7 @@ from Foundation import NSMakeRect, NSTimer
 WIDTH, HEIGHT = 380, 72
 RADIUS = 18
 BARS, DOT, GAP, ROWS = 32, 3.0, 2.0, 7
-SHOW_SECONDS = {"done": 1.6, "unsure": 2.6, "error": 3.0, "muted": 0.9}
+SHOW_SECONDS = {"done": 1.6, "unsure": 2.6, "error": 3.0, "muted": 0.9, "pending": 15.0}
 
 
 def rgba(r, g, b, a=1.0):
@@ -40,6 +40,7 @@ def text_attrs(font, color, kern: float = 0.0) -> dict:
 
 
 TITLE = text_attrs(mono(13, AppKit.NSFontWeightMedium), TEXT)
+ARROW = text_attrs(mono(16, AppKit.NSFontWeightSemibold), TEXT)
 DETAIL = text_attrs(mono(10), MUTED, 1.2)
 
 
@@ -90,6 +91,11 @@ class OverlayView(AppKit.NSView):
             for i in range(3):
                 alpha = 0.25 + 0.75 * max(0.0, math.sin(t * 7 - i * 0.9))
                 dot(18 + i * 8, cy, 2.5, TEXT.colorWithAlphaComponent_(alpha))
+        elif self.state == "pending":
+            arrow = AppKit.NSAttributedString.alloc().initWithString_attributes_("↑", ARROW)
+            size = arrow.size()
+            bob = 2 * math.sin(t * 4)
+            arrow.drawAtPoint_((26 - size.width / 2, cy - size.height / 2 + bob))
         else:
             dot(26, cy, 5, GLYPH.get(self.state, GREY))
         self._draw_text()
@@ -221,7 +227,10 @@ def demo():
         (6.0, lambda: overlay.thinking("Hey Sam, just checking in on the deck for tomorrow.")),
         (6.3, lambda: overlay.result("Hey Sam, just checking in on the deck for tomorrow.",
                                      "unsure · ignore noise 0.52 · not acting", "unsure")),
-        (10.0, AppHelper.stopEventLoop),
+        (9.0, overlay.listening),
+        (10.5, lambda: overlay.thinking("Time to write some lyrics.")),
+        (10.8, lambda: overlay.result("Time to write some lyrics.", "↑ swipe up · Notes", "pending")),
+        (14.0, AppHelper.stopEventLoop),
     ]
     for delay, step in steps:
         NSTimer.scheduledTimerWithTimeInterval_repeats_block_(delay, False, lambda _, s=step: s())
