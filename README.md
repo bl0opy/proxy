@@ -37,6 +37,34 @@ action and total time. White dot = done, amber = unsure or refused (not acted on
 red = failed. It never takes focus or clicks, so the app you spoke into stays active.
 `python -m proxy.overlay` plays a short demo.
 
+## Gestures
+
+The webcam watches for one hand (MediaPipe gesture recognizer, ~14 ms a frame, every 5th
+frame when no hand has been seen for 2 s).
+
+| gesture | does |
+|---|---|
+| hold an open palm still ~0.35 s | start listening (same as holding right ⌥); lower the hand or close it to send |
+| swipe up while listening | send, and open the app that best fits what you said |
+| swipe up | open the app staged by your last fuzzy request; otherwise Mission Control |
+| swipe left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
+| swipe down | minimize the front window |
+
+Clear commands still run as soon as you stop talking. Requests that aren't commands but
+point at an app ("time to write some lyrics") are staged instead: the pill shows
+`↑ … · open Notes` for 15 s and a swipe up opens it. The best-fit app is one more
+question in the same Jev request (`bench/fit_eval.py`: 18/18, ~100 ms).
+
+While you talk, whatever is playing is quieted: the output volume drops to 10% when the
+device has a volume control; otherwise (audio interfaces with a hardware knob) Spotify or
+Music is paused, or play/pause is sent when a browser is the one playing. It comes back
+when the request is routed, unless the request was itself play or pause.
+
+`python -m proxy.gesture` opens a debug view with the hand points and detected events,
+for tuning the thresholds at the top of `proxy/gesture.py`. `--no-gestures` turns the
+camera off; the menu bar item toggles it. The model (`models/gesture_recognizer.task`,
+8 MB) downloads on first run.
+
 ## Proxy.app
 
 ```bash
@@ -56,7 +84,7 @@ rebuild when `app/` changes.
 ## Permissions
 
 Proxy.app (or the terminal, when run from one) needs, in System Settings → Privacy & Security:
-**Microphone** (voice), **Input Monitoring** (the hotkey) and **Accessibility** (typing,
+**Microphone** (voice), **Camera** (gestures), **Input Monitoring** (the hotkey) and **Accessibility** (typing,
 windows, media keys, reading the selection). `python -m proxy --request-access` raises the
 prompts.
 
