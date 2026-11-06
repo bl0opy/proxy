@@ -31,7 +31,8 @@ IDLE_EVERY = 5
 
 INDEX, MIDDLE, RING, PINKY = (8, 6), (12, 10), (16, 14), (20, 18)
 WRIST, INDEX_KNUCKLE, MIDDLE_KNUCKLE = 0, 5, 9
-TWO_SHARE = 2 / 3
+POINTING_SHARE = 0.6
+CURL_RATIO = 0.65
 
 
 @dataclass
@@ -40,8 +41,12 @@ class Hand:
     y: float
     size: float
     pose: str
-    tip_x: float = 0.0
-    tip_y: float = 0.0
+    pointing: bool | None = None
+    reach: float = 1.0
+
+    def __post_init__(self):
+        if self.pointing is None:
+            self.pointing = self.pose == "two"
 
     @property
     def open(self) -> bool:
@@ -54,13 +59,16 @@ class Sample:
     x: float
     y: float
     pose: str
+    pointing: bool
+    reach: float
 
 
 def hand_from_landmarks(points) -> Hand:
-    """Position is the midpoint of the index and middle knuckles, which move with the
-    hand but not with curling fingers; tip_x/tip_y is the fingertip midpoint, for display.
-    Pose is "open" (four fingers out), "two" (index and middle out, ring and pinky
-    curled) or "other"."""
+    """Position is the midpoint of the index and middle fingertips. Pose is "open"
+    (four fingers out), "two" (index and middle out, ring and pinky curled) or "other".
+    pointing is looser than "two" (ring or pinky may be half out, as they blur in a fast
+    flick); reach is fingertip-to-knuckle distance over hand size, which drops when the
+    fingers curl."""
     def dist(a, b):
         return math.hypot(points[a].x - points[b].x, points[a].y - points[b].y)
 
@@ -75,11 +83,13 @@ def hand_from_landmarks(points) -> Hand:
         pose = "two"
     else:
         pose = "other"
-    x = (points[INDEX_KNUCKLE].x + points[MIDDLE_KNUCKLE].x) / 2
-    y = (points[INDEX_KNUCKLE].y + points[MIDDLE_KNUCKLE].y) / 2
-    tip_x = (points[INDEX[0]].x + points[MIDDLE[0]].x) / 2
-    tip_y = (points[INDEX[0]].y + points[MIDDLE[0]].y) / 2
-    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), pose, tip_x, tip_y)
+    x = (points[INDEX[0]].x + points[MIDDLE[0]].x) / 2
+    y = (points[INDEX[0]].y + points[MIDDLE[0]].y) / 2
+    kx = (points[INDEX_KNUCKLE].x + points[MIDDLE_KNUCKLE].x) / 2
+    ky = (points[INDEX_KNUCKLE].y + points[MIDDLE_KNUCKLE].y) / 2
+    size = dist(WRIST, MIDDLE_KNUCKLE)
+    reach = math.hypot(x - kx, y - ky) / size if size else 0.0
+    return Hand(x, y, size, pose, index and middle and not (ring and pinky), reach)
 
 
 class Detector:
@@ -109,8 +119,8 @@ class Detector:
                 self.appeared_at = t
                 self.track.clear()
             self.last_seen = t
-            self.track.append(Sample(t, hand.x, hand.y, hand.pose))
-            if hand.open or (self.palm and hand.pose == "two"):
+            self.track.append(Sample(t, hand.x, hand.y, hand.pose, hand.pointing, hand.reach))
+            if hand.open or (self.palm and hand.pointing):
                 self.last_open = t
         while self.track and t - self.track[0].t > SWIPE_WINDOW + RETURN_LOOKBACK:
             self.track.popleft()
@@ -171,7 +181,10 @@ class Detector:
             return None
         since = max(self.appeared_at + ENTRY_SETTLE, self.cooldown_until, t - SWIPE_WINDOW)
         window = [s for s in self.track if s.t >= since]
-        if len(window) < 3 or sum(s.pose == "two" for s in window) < TWO_SHARE * len(window):
+        if len(window) < 3 or sum(s.pointing for s in window) < POINTING_SHARE * len(window):
+            return None
+        reaches = [s.reach for s in window if s.pointing] or [0.0]
+        if min(reaches) < CURL_RATIO * max(reaches) or window[-1].reach < CURL_RATIO * max(reaches):
             return None
         dx = window[-1].x - window[0].x
         dy = window[-1].y - window[0].y
@@ -331,7 +344,8 @@ def debug():
         stamps.append(now)
         fps = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 else 0
         record.write(json.dumps({"t": now, "hand": hand and [round(hand.x, 4), round(hand.y, 4),
-                                                             round(hand.size, 4), hand.pose]}) + "\n")
+                                                             round(hand.size, 4), hand.pose,
+                                                             hand.pointing, round(hand.reach, 3)]}) + "\n")
         h, w = frame.shape[:2]
         for points in result.hand_landmarks:
             for p in points:
@@ -344,12 +358,11 @@ def debug():
         cv2.putText(frame, f"{fps:4.1f} fps  window dx {dx:+.2f} dy {dy:+.2f} (need {SWIPE_DISTANCE})",
                     (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         if hand:
-            color = (0, 0, 255) if detector.palm else {"open": (0, 200, 0), "two": (255, 160, 0)}.get(
-                hand.pose, (160, 160, 160))
-            cv2.circle(frame, (int(hand.tip_x * w), int(hand.tip_y * h)), 12, color, 2)
-            cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 4, color, -1)
+            color = (0, 0, 255) if detector.palm else (0, 200, 0) if hand.open else (
+                (255, 160, 0) if hand.pointing else (160, 160, 160))
+            cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 12, color, 2)
             label = result.gestures[0][0].category_name if result.gestures else ""
-            cv2.putText(frame, f"size {hand.size:.2f} {hand.pose} {label}", (10, 24),
+            cv2.putText(frame, f"size {hand.size:.2f} {hand.pose} reach {hand.reach:.2f} {label}", (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         if detector.palm:
             cv2.putText(frame, "LISTENING", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
