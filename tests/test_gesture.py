@@ -73,6 +73,20 @@ class DetectorTest(unittest.TestCase):
         events, _ = run(d, move(0.3, 0.4, 0.7, 0.4, 0.2) + move(0.7, 0.4, 0.3, 0.4, 0.3) + hold(0.3, 0.4, 0.2, "two"), t)
         self.assertEqual(events, ["swipe_right"])
 
+    def test_slow_return_after_swipe_is_ignored(self):
+        d = Detector()
+        _, t = run(d, hold(0.3, 0.4, 0.3, "two"))
+        events, _ = run(d, move(0.3, 0.4, 0.7, 0.4, 0.2) + hold(0.7, 0.4, 0.4, "two")
+                        + move(0.7, 0.4, 0.3, 0.4, 0.3) + hold(0.3, 0.4, 0.2, "two"), t)
+        self.assertEqual(events, ["swipe_right"])
+
+    def test_same_direction_twice(self):
+        d = Detector()
+        _, t = run(d, hold(0.2, 0.4, 0.3, "two"))
+        path = move(0.2, 0.4, 0.5, 0.4, 0.2) + hold(0.5, 0.4, 0.4, "two") + move(0.5, 0.4, 0.8, 0.4, 0.2)
+        events, _ = run(d, path + hold(0.8, 0.4, 0.1, "two"), t)
+        self.assertEqual(events, ["swipe_right", "swipe_right"])
+
     def test_closed_hand_does_not_swipe_or_listen(self):
         d = Detector()
         events, _ = run(d, hold(0.3, 0.4, 0.8, "other") + move(0.3, 0.4, 0.7, 0.4, 0.2, "other"))

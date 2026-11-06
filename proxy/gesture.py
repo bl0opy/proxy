@@ -16,7 +16,10 @@ SWIPE_DISTANCE = 0.16
 AXIS_RATIO = 1.6
 RETURN_LOOKBACK = 0.6
 RETURN_FRACTION = 0.6
-COOLDOWN = 0.7
+COOLDOWN = 0.5
+RETURN_GUARD = 1.2
+OPPOSITE = {"swipe_left": "swipe_right", "swipe_right": "swipe_left",
+            "swipe_up": "swipe_down", "swipe_down": "swipe_up"}
 ENTRY_SETTLE = 0.25
 DOWN_CONFIRM = 0.2
 EXIT_EDGE = 0.85
@@ -95,6 +98,8 @@ class Detector:
         self.last_open = -math.inf
         self.still_since: float | None = None
         self.pending_down: float | None = None
+        self.last_swipe = ""
+        self.last_swipe_at = -math.inf
 
     def update(self, t: float, hand: Hand | None) -> list[str]:
         events = []
@@ -119,6 +124,7 @@ class Detector:
                 return events
 
         if swipe := self._swipe(t):
+            self.last_swipe, self.last_swipe_at = swipe, t
             self.track.clear()
             self.still_since = None
             self.cooldown_until = t + COOLDOWN
@@ -174,6 +180,8 @@ class Detector:
         elif abs(dy) >= SWIPE_DISTANCE and abs(dy) >= AXIS_RATIO * abs(dx):
             axis, move, swipe = "y", dy, "swipe_down" if dy > 0 else "swipe_up"
         else:
+            return None
+        if self.last_swipe == OPPOSITE[swipe] and t - self.last_swipe_at < RETURN_GUARD:
             return None
         return None if self._returning(window[0], axis, move) else swipe
 
