@@ -26,7 +26,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
-    <key>NSMicrophoneUsageDescription</key><string>Proxy listens only while you hold the push-to-talk key.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Proxy listens only while you hold the push-to-talk key or raise your palm.</string>
+    <key>NSCameraUsageDescription</key><string>Proxy watches for hand gestures: swipes and a raised palm.</string>
     <key>NSAppleEventsUsageDescription</key><string>Proxy controls the apps you ask it to.</string>
 </dict>
 </plist>

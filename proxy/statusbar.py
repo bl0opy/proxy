@@ -48,7 +48,11 @@ class MenuTarget(AppKit.NSObject):
         pane = "ListenEvent" if not listen_access() else "Accessibility"
         AppKit.NSWorkspace.sharedWorkspace().openURL_(AppKit.NSURL.URLWithString_(PRIVACY + pane))
 
+    def toggleGestures_(self, sender):
+        self.bar.toggle_gestures()
+
     def restart_(self, sender):
+        self.bar.before_exit()
         os._exit(RESTART_STATUS)
 
     def menuWillOpen_(self, menu):
@@ -56,8 +60,12 @@ class MenuTarget(AppKit.NSObject):
 
 
 class StatusBar:
-    def __init__(self, key_label: str, get_dry_run: Callable[[], bool], set_dry_run: Callable[[bool], None]):
+    def __init__(self, key_label: str, get_dry_run: Callable[[], bool], set_dry_run: Callable[[bool], None],
+                 get_gestures: Callable[[], bool], set_gestures: Callable[[bool], None],
+                 gesture_status: Callable[[], str], before_exit: Callable[[], None]):
         self._get_dry_run, self._set_dry_run = get_dry_run, set_dry_run
+        self._get_gestures, self._set_gestures, self._gesture_status = get_gestures, set_gestures, gesture_status
+        self.before_exit = before_exit
         self._target = MenuTarget.alloc().initWithBar_(self)
         self._item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(AppKit.NSVariableStatusItemLength)
         self._item.button().setImage_(symbol("waveform"))
@@ -67,7 +75,9 @@ class StatusBar:
         menu.setAutoenablesItems_(False)
         self._title = self._add(menu, f"Proxy — hold {key_label} to talk", None)
         self._status = self._add(menu, "", None)
+        self._camera_status = self._add(menu, "", None)
         menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        self._gestures = self._add(menu, "Gestures (camera)", "toggleGestures:")
         self._dry = self._add(menu, "Dry run (plan only)", "toggleDryRun:")
         self._grant = self._add(menu, "Grant permissions…", "grantPermissions:")
         self._add(menu, "Open log", "openLog:")
@@ -91,9 +101,15 @@ class StatusBar:
         self._status.setTitle_(f"Needs {', '.join(missing)}" if missing else "Ready")
         self._grant.setHidden_(not missing)
         self._dry.setState_(AppKit.NSControlStateValueOn if self._get_dry_run() else AppKit.NSControlStateValueOff)
+        self._gestures.setState_(AppKit.NSControlStateValueOn if self._get_gestures() else AppKit.NSControlStateValueOff)
+        self._camera_status.setTitle_(f"Gestures: {self._gesture_status()}")
 
     def toggle_dry_run(self):
         self._set_dry_run(not self._get_dry_run())
+        self.refresh()
+
+    def toggle_gestures(self):
+        self._set_gestures(not self._get_gestures())
         self.refresh()
 
     def listening(self, on: bool):
