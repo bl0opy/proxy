@@ -107,14 +107,19 @@ class Ducker:
         except Exception as e:
             print(f"  duck failed: {type(e).__name__}: {e}")
 
-    def release(self, media_action: str | None = None):
+    def release(self, media_action: str | None = None) -> bool:
+        """Returns True when playback was paused by the duck and is left paused, because
+        the command itself was play or pause."""
         duck, self._duck = self._duck, None
-        if duck is None or (duck.kind == "pause" and media_action in ("play", "pause")):
-            return
+        if duck is None:
+            return False
+        if duck.kind == "pause" and media_action in ("play", "pause"):
+            return True
         try:
             duck.undo()
         except Exception as e:
             print(f"  unduck failed: {type(e).__name__}: {e}")
+        return False
 
     def _lower_volume(self) -> Duck | None:
         device = output_device()

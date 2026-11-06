@@ -68,6 +68,8 @@ def main():
     parser.add_argument("--key", default="right_option", choices=sorted(KEYS),
                         help="push-to-talk key (default right_option)")
     parser.add_argument("--wav", help="transcribe an audio file instead of the mic")
+    parser.add_argument("--no-gestures", action="store_true", help="don't use the camera for gestures")
+    parser.add_argument("--camera", type=int, default=0, help="camera index for gestures (default 0)")
     parser.add_argument("--menu-bar", action="store_true", help="show a menu bar item (on in Proxy.app)")
     args = parser.parse_args()
     in_app = os.environ.get("PROXY_APP") == "1"
@@ -94,7 +96,8 @@ def main():
         from .voice import Listener
         label = {"right_option": "right ⌥", "right_command": "right ⌘",
                  "right_control": "right ⌃", "fn": "fn"}[args.key]
-        Listener(router, args.key, args.dry_run).run(label, menu_bar=in_app or args.menu_bar)
+        Listener(router, args.key, args.dry_run, gestures=not args.no_gestures,
+                 camera=args.camera).run(label, menu_bar=in_app or args.menu_bar)
         return
     if args.wav:
         transcribe_file(router, args.wav, args)
