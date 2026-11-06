@@ -114,8 +114,8 @@ class DetectorTest(unittest.TestCase):
         d = Detector()
         _, t = run(d, hold(0.5, 0.5, 0.4, "two"))
         n = 6
-        curl = [Hand(0.5, 0.5 + 0.2 * i / n, 0.15, "two", True, 1.6 - 1.0 * i / n) for i in range(n + 1)]
-        events, _ = run(d, curl + [Hand(0.5, 0.7, 0.15, "other", False, 0.6)] * 10, t)
+        curl = [Hand(0.5, 0.5 + 0.2 * i / n, 0.15, "two", True, 90 * i / n) for i in range(n + 1)]
+        events, _ = run(d, curl + [Hand(0.5, 0.7, 0.15, "other", False, 90)] * 10, t)
         self.assertEqual(events, [])
 
     def test_small_background_hand_is_ignored(self):

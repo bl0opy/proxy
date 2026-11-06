@@ -12,7 +12,7 @@ MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/gesture_recognizer
 
 MIN_SIZE = 0.07
 SWIPE_WINDOW = 0.45
-SWIPE_DISTANCE = 0.16
+SWIPE_DISTANCE = 0.14
 AXIS_RATIO = 1.6
 RETURN_LOOKBACK = 0.6
 RETURN_FRACTION = 0.6
@@ -30,9 +30,9 @@ IDLE_AFTER = 2.0
 IDLE_EVERY = 5
 
 INDEX, MIDDLE, RING, PINKY = (8, 6), (12, 10), (16, 14), (20, 18)
-WRIST, INDEX_KNUCKLE, MIDDLE_KNUCKLE = 0, 5, 9
+WRIST, MIDDLE_KNUCKLE = 0, 9
 POINTING_SHARE = 0.6
-CURL_RATIO = 0.65
+CURL_DEGREES = 55
 
 
 @dataclass
@@ -42,7 +42,7 @@ class Hand:
     size: float
     pose: str
     pointing: bool | None = None
-    reach: float = 1.0
+    bend: float = 0.0
 
     def __post_init__(self):
         if self.pointing is None:
@@ -60,15 +60,26 @@ class Sample:
     y: float
     pose: str
     pointing: bool
-    reach: float
+    bend: float
 
 
-def hand_from_landmarks(points) -> Hand:
+def finger_bend(world, knuckle: int, joint: int, tip: int) -> float:
+    """Degrees the finger bends at its middle joint, from 3D world landmarks, so a
+    finger pointing at the camera still reads as straight."""
+    a = [getattr(world[joint], c) - getattr(world[knuckle], c) for c in "xyz"]
+    b = [getattr(world[tip], c) - getattr(world[joint], c) for c in "xyz"]
+    norm = math.hypot(*a) * math.hypot(*b)
+    if not norm:
+        return 0.0
+    cos = sum(i * j for i, j in zip(a, b)) / norm
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+
+
+def hand_from_landmarks(points, world=None) -> Hand:
     """Position is the midpoint of the index and middle fingertips. Pose is "open"
     (four fingers out), "two" (index and middle out, ring and pinky curled) or "other".
     pointing is looser than "two" (ring or pinky may be half out, as they blur in a fast
-    flick); reach is fingertip-to-knuckle distance over hand size, which drops when the
-    fingers curl."""
+    flick); bend is how far index and middle are curled, in degrees."""
     def dist(a, b):
         return math.hypot(points[a].x - points[b].x, points[a].y - points[b].y)
 
@@ -85,11 +96,8 @@ def hand_from_landmarks(points) -> Hand:
         pose = "other"
     x = (points[INDEX[0]].x + points[MIDDLE[0]].x) / 2
     y = (points[INDEX[0]].y + points[MIDDLE[0]].y) / 2
-    kx = (points[INDEX_KNUCKLE].x + points[MIDDLE_KNUCKLE].x) / 2
-    ky = (points[INDEX_KNUCKLE].y + points[MIDDLE_KNUCKLE].y) / 2
-    size = dist(WRIST, MIDDLE_KNUCKLE)
-    reach = math.hypot(x - kx, y - ky) / size if size else 0.0
-    return Hand(x, y, size, pose, index and middle and not (ring and pinky), reach)
+    bend = max(finger_bend(world, 5, 6, 8), finger_bend(world, 9, 10, 12)) if world else 0.0
+    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), pose, index and middle and not (ring and pinky), bend)
 
 
 class Detector:
@@ -119,7 +127,7 @@ class Detector:
                 self.appeared_at = t
                 self.track.clear()
             self.last_seen = t
-            self.track.append(Sample(t, hand.x, hand.y, hand.pose, hand.pointing, hand.reach))
+            self.track.append(Sample(t, hand.x, hand.y, hand.pose, hand.pointing, hand.bend))
             if hand.open or (self.palm and hand.pointing):
                 self.last_open = t
         while self.track and t - self.track[0].t > SWIPE_WINDOW + RETURN_LOOKBACK:
@@ -183,8 +191,7 @@ class Detector:
         window = [s for s in self.track if s.t >= since]
         if len(window) < 3 or sum(s.pointing for s in window) < POINTING_SHARE * len(window):
             return None
-        reaches = [s.reach for s in window if s.pointing] or [0.0]
-        if min(reaches) < CURL_RATIO * max(reaches) or window[-1].reach < CURL_RATIO * max(reaches):
+        if max(s.bend for s in window if s.pointing) > CURL_DEGREES or window[-1].bend > CURL_DEGREES:
             return None
         dx = window[-1].x - window[0].x
         dy = window[-1].y - window[0].y
@@ -310,7 +317,8 @@ class Camera:
                 ms = max(last_ms + 1, int((t - start) * 1000))
                 last_ms = ms
                 result = recognizer.recognize_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ms)
-                hand = hand_from_landmarks(result.hand_landmarks[0]) if result.hand_landmarks else None
+                hand = (hand_from_landmarks(result.hand_landmarks[0], result.hand_world_landmarks[0])
+                        if result.hand_landmarks else None)
                 for event in detector.update(t, hand):
                     self._on_event(event)
                 if self._on_frame:
@@ -345,7 +353,7 @@ def debug():
         fps = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 else 0
         record.write(json.dumps({"t": now, "hand": hand and [round(hand.x, 4), round(hand.y, 4),
                                                              round(hand.size, 4), hand.pose,
-                                                             hand.pointing, round(hand.reach, 3)]}) + "\n")
+                                                             hand.pointing, round(hand.bend, 1)]}) + "\n")
         h, w = frame.shape[:2]
         for points in result.hand_landmarks:
             for p in points:
@@ -362,7 +370,7 @@ def debug():
                 (255, 160, 0) if hand.pointing else (160, 160, 160))
             cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 12, color, 2)
             label = result.gestures[0][0].category_name if result.gestures else ""
-            cv2.putText(frame, f"size {hand.size:.2f} {hand.pose} reach {hand.reach:.2f} {label}", (10, 24),
+            cv2.putText(frame, f"size {hand.size:.2f} {hand.pose} bend {hand.bend:.0f} {label}", (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         if detector.palm:
             cv2.putText(frame, "LISTENING", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
