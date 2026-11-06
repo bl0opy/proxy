@@ -9,9 +9,13 @@ import ApplicationServices as AX
 import Quartz
 
 KEY_V, KEY_W = 9, 13
+KEY_LEFT, KEY_RIGHT = 123, 124
 NX_PLAY, NX_NEXT, NX_PREVIOUS = 16, 17, 18
 CMD = Quartz.kCGEventFlagMaskCommand
 OPT = Quartz.kCGEventFlagMaskAlternate
+CTRL = Quartz.kCGEventFlagMaskControl
+ARROW_FLAGS = Quartz.kCGEventFlagMaskSecondaryFn | Quartz.kCGEventFlagMaskNumericPad
+MISSION_CONTROL = "/System/Applications/Mission Control.app"
 
 
 class MacError(RuntimeError):
@@ -199,3 +203,12 @@ def close_window():
 
 def close_all_windows():
     key_combo(KEY_W, CMD | OPT)
+
+
+def switch_desktop(direction: str):
+    keycode = KEY_LEFT if direction == "left" else KEY_RIGHT
+    key_combo(keycode, CTRL | ARROW_FLAGS)
+
+
+def mission_control():
+    open_app(MISSION_CONTROL)
