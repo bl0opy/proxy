@@ -90,6 +90,12 @@ class DetectorTest(unittest.TestCase):
                         + hold(0.6, 0.6, 0.3, "two"), t)
         self.assertNotIn("swipe_up", events)
 
+    def test_open_palm_turning_into_two_fingers_mid_move_is_not_swipe(self):
+        d = Detector()
+        path = move(0.6, 0.6, 0.45, 0.6, 0.3, "open") + move(0.45, 0.6, 0.42, 0.6, 0.1, "two")
+        events, _ = run(d, hold(0.6, 0.6, 0.3, "two") + path)
+        self.assertEqual(events, [])
+
     def test_small_background_hand_is_ignored(self):
         d = Detector()
         events, _ = run(d, [Hand(0.5, 0.4, 0.03, "open")] * 30)

@@ -27,7 +27,8 @@ IDLE_AFTER = 2.0
 IDLE_EVERY = 5
 
 INDEX, MIDDLE, RING, PINKY = (8, 6), (12, 10), (16, 14), (20, 18)
-WRIST, MIDDLE_KNUCKLE = 0, 9
+WRIST, INDEX_KNUCKLE, MIDDLE_KNUCKLE = 0, 5, 9
+TWO_SHARE = 2 / 3
 
 
 @dataclass
@@ -36,6 +37,8 @@ class Hand:
     y: float
     size: float
     pose: str
+    tip_x: float = 0.0
+    tip_y: float = 0.0
 
     @property
     def open(self) -> bool:
@@ -51,8 +54,10 @@ class Sample:
 
 
 def hand_from_landmarks(points) -> Hand:
-    """Position is the midpoint of the index and middle fingertips. Pose is "open"
-    (four fingers out), "two" (index and middle out, ring and pinky curled) or "other"."""
+    """Position is the midpoint of the index and middle knuckles, which move with the
+    hand but not with curling fingers; tip_x/tip_y is the fingertip midpoint, for display.
+    Pose is "open" (four fingers out), "two" (index and middle out, ring and pinky
+    curled) or "other"."""
     def dist(a, b):
         return math.hypot(points[a].x - points[b].x, points[a].y - points[b].y)
 
@@ -67,9 +72,11 @@ def hand_from_landmarks(points) -> Hand:
         pose = "two"
     else:
         pose = "other"
-    x = (points[INDEX[0]].x + points[MIDDLE[0]].x) / 2
-    y = (points[INDEX[0]].y + points[MIDDLE[0]].y) / 2
-    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), pose)
+    x = (points[INDEX_KNUCKLE].x + points[MIDDLE_KNUCKLE].x) / 2
+    y = (points[INDEX_KNUCKLE].y + points[MIDDLE_KNUCKLE].y) / 2
+    tip_x = (points[INDEX[0]].x + points[MIDDLE[0]].x) / 2
+    tip_y = (points[INDEX[0]].y + points[MIDDLE[0]].y) / 2
+    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), pose, tip_x, tip_y)
 
 
 class Detector:
@@ -98,7 +105,7 @@ class Detector:
                 self.track.clear()
             self.last_seen = t
             self.track.append(Sample(t, hand.x, hand.y, hand.pose))
-            if hand.open:
+            if hand.open or (self.palm and hand.pose == "two"):
                 self.last_open = t
         while self.track and t - self.track[0].t > SWIPE_WINDOW + RETURN_LOOKBACK:
             self.track.popleft()
@@ -158,7 +165,7 @@ class Detector:
             return None
         since = max(self.appeared_at + ENTRY_SETTLE, self.cooldown_until, t - SWIPE_WINDOW)
         window = [s for s in self.track if s.t >= since]
-        if len(window) < 3 or sum(s.pose == "two" for s in window) * 2 < len(window):
+        if len(window) < 3 or sum(s.pose == "two" for s in window) < TWO_SHARE * len(window):
             return None
         dx = window[-1].x - window[0].x
         dy = window[-1].y - window[0].y
@@ -331,7 +338,8 @@ def debug():
         if hand:
             color = (0, 0, 255) if detector.palm else {"open": (0, 200, 0), "two": (255, 160, 0)}.get(
                 hand.pose, (160, 160, 160))
-            cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 10, color, 2)
+            cv2.circle(frame, (int(hand.tip_x * w), int(hand.tip_y * h)), 12, color, 2)
+            cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 4, color, -1)
             label = result.gestures[0][0].category_name if result.gestures else ""
             cv2.putText(frame, f"size {hand.size:.2f} {hand.pose} {label}", (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
