@@ -191,7 +191,7 @@ class Detector:
         window = [s for s in self.track if s.t >= since]
         if len(window) < 3 or sum(s.pointing for s in window) < POINTING_SHARE * len(window):
             return None
-        if max(s.bend for s in window if s.pointing) > CURL_DEGREES or window[-1].bend > CURL_DEGREES:
+        if max(s.bend for s in window) > CURL_DEGREES:
             return None
         dx = window[-1].x - window[0].x
         dy = window[-1].y - window[0].y

@@ -118,6 +118,14 @@ class DetectorTest(unittest.TestCase):
         events, _ = run(d, curl + [Hand(0.5, 0.7, 0.15, "other", False, 90)] * 10, t)
         self.assertEqual(events, [])
 
+    def test_uncurling_fingers_is_not_swipe_up(self):
+        d = Detector()
+        _, t = run(d, [Hand(0.5, 0.7, 0.15, "other", False, 95)] * 12)
+        n = 4
+        straighten = [Hand(0.5, 0.7 - 0.2 * i / n, 0.15, "two", True, 95 - 95 * i / n) for i in range(1, n + 1)]
+        events, _ = run(d, straighten + hold(0.5, 0.5, 0.4, "two"), t)
+        self.assertEqual(events, [])
+
     def test_small_background_hand_is_ignored(self):
         d = Detector()
         events, _ = run(d, [Hand(0.5, 0.4, 0.03, "open")] * 30)
