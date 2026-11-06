@@ -162,6 +162,20 @@ def ensure_model():
     partial.rename(MODEL)
 
 
+def camera_access(timeout: float = 60) -> bool:
+    import AVFoundation as AV
+    status = AV.AVCaptureDevice.authorizationStatusForMediaType_(AV.AVMediaTypeVideo)
+    if status == AV.AVAuthorizationStatusAuthorized:
+        return True
+    if status != AV.AVAuthorizationStatusNotDetermined:
+        return False
+    answered, granted = threading.Event(), []
+    AV.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+        AV.AVMediaTypeVideo, lambda ok: (granted.append(ok), answered.set()))
+    answered.wait(timeout)
+    return bool(granted and granted[0])
+
+
 def load_recognizer():
     from mediapipe.tasks.python import BaseOptions, vision
     ensure_model()
@@ -202,6 +216,10 @@ class Camera:
     def _run(self):
         import cv2
         import mediapipe as mp
+        if not camera_access():
+            self.error = "no camera access (System Settings → Privacy & Security → Camera)"
+            print(f"gestures off: {self.error}")
+            return
         try:
             recognizer = load_recognizer()
         except Exception as e:

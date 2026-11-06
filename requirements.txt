@@ -1,6 +1,7 @@
 pyobjc-core==12.2.2
 pyobjc-framework-Cocoa==12.2.2
 pyobjc-framework-Quartz==12.2.2
+pyobjc-framework-AVFoundation==12.2.2
 pyobjc-framework-ApplicationServices==12.2.2
 laya==0.4.12
 parakeet-mlx==0.5.2
