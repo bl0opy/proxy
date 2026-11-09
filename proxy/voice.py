@@ -188,6 +188,8 @@ class Listener:
         elif event == "swipe_up":
             if pending := self._take_pending():
                 self._run(pending.text, open_route(pending.app))
+            elif mac.has_minimized():
+                self._run("swipe up", None, "restore window", mac.restore_minimized, quiet=True)
             else:
                 self._run("swipe up", None, "mission control", mac.mission_control)
         else:
@@ -197,7 +199,10 @@ class Listener:
                 side = event.removeprefix("swipe_")
                 self._run(f"swipe {side}", None, f"desktop {side}", lambda: mac.switch_desktop(side), quiet=True)
             elif event == "swipe_down":
-                self._run("swipe down", None, "minimize", mac.minimize_window)
+                if mac.in_mission_control():
+                    self._run("swipe down", None, "exit mission control", mac.mission_control, quiet=True)
+                else:
+                    self._run("swipe down", None, "minimize", mac.minimize_window)
 
     def _run(self, title: str, route: Route | None, label: str = "", action=None, quiet: bool = False):
         ctx = mac.capture_context()

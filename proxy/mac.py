@@ -16,6 +16,9 @@ OPT = Quartz.kCGEventFlagMaskAlternate
 CTRL = Quartz.kCGEventFlagMaskControl
 ARROW_FLAGS = Quartz.kCGEventFlagMaskSecondaryFn | Quartz.kCGEventFlagMaskNumericPad
 MISSION_CONTROL = "/System/Applications/Mission Control.app"
+MISSION_CONTROL_LAYER = 18
+
+_minimized: list = []
 
 
 class MacError(RuntimeError):
@@ -186,7 +189,24 @@ def tile(where: str):
 
 
 def minimize_window():
-    AX.AXUIElementSetAttributeValue(_focused_window(), AX.kAXMinimizedAttribute, True)
+    window = _focused_window()
+    AX.AXUIElementSetAttributeValue(window, AX.kAXMinimizedAttribute, True)
+    _minimized.append((window, frontmost_app().processIdentifier()))
+
+
+def has_minimized() -> bool:
+    while _minimized and not _ax(_minimized[-1][0], AX.kAXMinimizedAttribute):
+        _minimized.pop()
+    return bool(_minimized)
+
+
+def restore_minimized():
+    if not has_minimized():
+        raise MacError("no minimized window to restore")
+    window, pid = _minimized.pop()
+    AX.AXUIElementSetAttributeValue(window, AX.kAXMinimizedAttribute, False)
+    AX.AXUIElementPerformAction(window, AX.kAXRaiseAction)
+    AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid).activateWithOptions_(0)
 
 
 def toggle_fullscreen():
@@ -212,3 +232,9 @@ def switch_desktop(direction: str):
 
 def mission_control():
     open_app(MISSION_CONTROL)
+
+
+def in_mission_control() -> bool:
+    windows = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
+    return any(w.get("kCGWindowOwnerName") == "Dock" and w.get("kCGWindowLayer") == MISSION_CONTROL_LAYER
+               for w in windows or [])

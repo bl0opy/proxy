@@ -46,9 +46,9 @@ frame when no hand has been seen for 2 s).
 |---|---|
 | hold an open palm still ~0.35 s | start listening (same as holding right ⌥); lower the hand or close it to send |
 | pinch, drag up while listening | send, and open the app that best fits what you said |
-| pinch, drag up | open the app staged by your last fuzzy request; otherwise Mission Control |
+| pinch, drag up | open the app staged by your last fuzzy request; otherwise bring back the last minimized window; otherwise Mission Control |
 | pinch, drag left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
-| pinch, drag down | minimize the front window |
+| pinch, drag down | leave Mission Control if it's open; otherwise minimize the front window |
 
 A drag is thumb and index pinched while the whole hand moves about an eighth of the frame.
 Each pinch fires once and moving back with the fingers apart does nothing, like lifting a
