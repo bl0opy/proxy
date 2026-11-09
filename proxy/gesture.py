@@ -14,6 +14,7 @@ MIN_SIZE = 0.07
 PINCH_ON = 0.3
 PINCH_OFF = 0.5
 PINCH_FRAMES = 2
+RELEASE_FRAMES = 3
 DRAG_DISTANCE = 0.12
 AXIS_RATIO = 1.6
 HOLD_SECONDS = 0.35
@@ -70,6 +71,7 @@ class Detector:
         self.still_since: float | None = None
         self.pinching = False
         self.pinch_frames = 0
+        self.release_frames = 0
         self.anchor: tuple[float, float] | None = None
         self.fired = False
         self.released_at = -math.inf
@@ -115,16 +117,19 @@ class Detector:
 
     def _update_pinch(self, t: float, hand: Hand | None):
         if self.pinching:
-            released = hand.gap > PINCH_OFF if hand else t - self.last_seen > LOST_SECONDS
-            if released:
+            if hand:
+                self.release_frames = self.release_frames + 1 if hand.gap > PINCH_OFF else 0
+            if self.release_frames >= RELEASE_FRAMES or t - self.last_seen > LOST_SECONDS:
                 self.pinching = False
                 self.pinch_frames = 0
+                self.release_frames = 0
                 self.anchor = None
                 self.released_at = t
             return
         self.pinch_frames = self.pinch_frames + 1 if hand and hand.gap < PINCH_ON else 0
         if self.pinch_frames >= PINCH_FRAMES:
             self.pinching = True
+            self.armed = False
             self.fired = False
             self.anchor = (hand.x, hand.y)
 

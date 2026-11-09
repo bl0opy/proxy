@@ -55,6 +55,10 @@ class PalmTest(unittest.TestCase):
         events, _ = run(d, pinch(0.5, 0.4, 0.4) + move(0.5, 0.4, 0.5, 0.2, 0.2), t)
         self.assertEqual(events, ["swipe_up"])
 
+    def test_open_hand_after_undragged_pinch_does_not_listen(self):
+        events, _ = run(Detector(), pinch(0.5, 0.5, 0.5) + hold(0.5, 0.5, 1.0))
+        self.assertEqual(events, [])
+
     def test_no_accidental_listen_after_swipe_until_hand_rests(self):
         d = Detector()
         events, t = run(d, pinch(0.5, 0.5) + move(0.5, 0.5, 0.8, 0.5, 0.2) + hold(0.8, 0.5, 1.0))
@@ -107,6 +111,12 @@ class DragTest(unittest.TestCase):
 
     def test_brief_tracking_dropout_keeps_pinch(self):
         path = pinch(0.3, 0.5) + gone(0.1) + move(0.3, 0.5, 0.6, 0.5, 0.2)
+        events, _ = run(Detector(), path)
+        self.assertEqual(events, ["swipe_right"])
+
+    def test_brief_gap_spike_mid_drag_keeps_pinch(self):
+        spike = [Hand(0.4, 0.5, 0.15, False, 0.65)] * 2
+        path = pinch(0.3, 0.5) + move(0.3, 0.5, 0.4, 0.5, 0.1) + spike + move(0.4, 0.5, 0.6, 0.5, 0.1)
         events, _ = run(Detector(), path)
         self.assertEqual(events, ["swipe_right"])
 
