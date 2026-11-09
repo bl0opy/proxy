@@ -12,7 +12,7 @@ MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/gesture_recognizer
 
 MIN_SIZE = 0.07
 SWIPE_WINDOW = 0.45
-SWIPE_DISTANCE = 0.14
+SWIPE_DISTANCE = 0.25
 AXIS_RATIO = 1.6
 RETURN_LOOKBACK = 0.6
 RETURN_FRACTION = 0.6
@@ -29,10 +29,9 @@ LOST_SECONDS = 0.25
 IDLE_AFTER = 2.0
 IDLE_EVERY = 5
 
-INDEX, MIDDLE, RING, PINKY = (8, 6), (12, 10), (16, 14), (20, 18)
+FINGERS = ((8, 6), (12, 10), (16, 14), (20, 18))
 WRIST, MIDDLE_KNUCKLE = 0, 9
-POINTING_SHARE = 0.6
-CURL_DEGREES = 55
+PALM = (0, 5, 9, 13, 17)
 
 
 @dataclass
@@ -40,17 +39,7 @@ class Hand:
     x: float
     y: float
     size: float
-    pose: str
-    pointing: bool | None = None
-    bend: float = 0.0
-
-    def __post_init__(self):
-        if self.pointing is None:
-            self.pointing = self.pose == "two"
-
-    @property
-    def open(self) -> bool:
-        return self.pose == "open"
+    open: bool
 
 
 @dataclass
@@ -58,52 +47,22 @@ class Sample:
     t: float
     x: float
     y: float
-    pose: str
-    pointing: bool
-    bend: float
 
 
-def finger_bend(world, knuckle: int, joint: int, tip: int) -> float:
-    """Degrees the finger bends at its middle joint, from 3D world landmarks, so a
-    finger pointing at the camera still reads as straight."""
-    a = [getattr(world[joint], c) - getattr(world[knuckle], c) for c in "xyz"]
-    b = [getattr(world[tip], c) - getattr(world[joint], c) for c in "xyz"]
-    norm = math.hypot(*a) * math.hypot(*b)
-    if not norm:
-        return 0.0
-    cos = sum(i * j for i, j in zip(a, b)) / norm
-    return math.degrees(math.acos(max(-1.0, min(1.0, cos))))
-
-
-def hand_from_landmarks(points, world=None) -> Hand:
-    """Position is the midpoint of the index and middle fingertips. Pose is "open"
-    (four fingers out), "two" (index and middle out, ring and pinky curled) or "other".
-    pointing is looser than "two" (ring or pinky may be half out, as they blur in a fast
-    flick); bend is how far index and middle are curled, in degrees."""
+def hand_from_landmarks(points) -> Hand:
     def dist(a, b):
         return math.hypot(points[a].x - points[b].x, points[a].y - points[b].y)
 
-    def extended(finger):
-        tip, pip = finger
-        return dist(WRIST, tip) > 1.1 * dist(WRIST, pip)
-
-    index, middle, ring, pinky = map(extended, (INDEX, MIDDLE, RING, PINKY))
-    if index and middle and ring and pinky:
-        pose = "open"
-    elif index and middle and not ring and not pinky:
-        pose = "two"
-    else:
-        pose = "other"
-    x = (points[INDEX[0]].x + points[MIDDLE[0]].x) / 2
-    y = (points[INDEX[0]].y + points[MIDDLE[0]].y) / 2
-    bend = max(finger_bend(world, 5, 6, 8), finger_bend(world, 9, 10, 12)) if world else 0.0
-    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), pose, index and middle and not (ring and pinky), bend)
+    extended = sum(dist(WRIST, tip) > 1.1 * dist(WRIST, pip) for tip, pip in FINGERS)
+    x = sum(points[i].x for i in PALM) / len(PALM)
+    y = sum(points[i].y for i in PALM) / len(PALM)
+    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), extended >= 4)
 
 
 class Detector:
     """Turns a stream of hand positions (mirrored, 0–1, y down) into events:
     palm_start / palm_end for a held open palm, and swipe_left/right/up/down for a
-    two-finger swipe. A swipe during a palm hold ends it without a palm_end, except
+    large whole-hand move, in any hand shape. A swipe during a palm hold ends it without a palm_end, except
     a downward one, which is read as lowering the hand. Pure logic, no camera."""
 
     def __init__(self):
@@ -127,8 +86,8 @@ class Detector:
                 self.appeared_at = t
                 self.track.clear()
             self.last_seen = t
-            self.track.append(Sample(t, hand.x, hand.y, hand.pose, hand.pointing, hand.bend))
-            if hand.open or (self.palm and hand.pointing):
+            self.track.append(Sample(t, hand.x, hand.y))
+            if hand.open:
                 self.last_open = t
         while self.track and t - self.track[0].t > SWIPE_WINDOW + RETURN_LOOKBACK:
             self.track.popleft()
@@ -189,9 +148,7 @@ class Detector:
             return None
         since = max(self.appeared_at + ENTRY_SETTLE, self.cooldown_until, t - SWIPE_WINDOW)
         window = [s for s in self.track if s.t >= since]
-        if len(window) < 3 or sum(s.pointing for s in window) < POINTING_SHARE * len(window):
-            return None
-        if max(s.bend for s in window) > CURL_DEGREES:
+        if len(window) < 3:
             return None
         dx = window[-1].x - window[0].x
         dy = window[-1].y - window[0].y
@@ -206,15 +163,16 @@ class Detector:
         return None if self._returning(window[0], axis, move) else swipe
 
     def _returning(self, start: Sample, axis: str, move: float) -> bool:
-        """True when the hand just travelled the other way: this is the stroke back
-        from a swipe that didn't fire, not a new one."""
-        before = [s for s in self.track if start.t - RETURN_LOOKBACK <= s.t < start.t]
-        if not before:
-            return False
-        values = [getattr(s, axis) for s in before]
-        here = getattr(start, axis)
-        back = here - min(values) if move < 0 else max(values) - here
-        return back >= RETURN_FRACTION * SWIPE_DISTANCE
+        """True when the hand travelled the other way just before this stroke: it's the
+        way back from a swipe that didn't fire, not a new one."""
+        values = [getattr(s, axis) for s in self.track if s.t >= start.t - RETURN_LOOKBACK]
+        if move < 0:
+            peak = values.index(max(values))
+            travel = values[peak] - min(values[: peak + 1])
+        else:
+            peak = values.index(min(values))
+            travel = max(values[: peak + 1]) - values[peak]
+        return travel >= RETURN_FRACTION * SWIPE_DISTANCE
 
 
 def ensure_model():
@@ -317,8 +275,7 @@ class Camera:
                 ms = max(last_ms + 1, int((t - start) * 1000))
                 last_ms = ms
                 result = recognizer.recognize_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ms)
-                hand = (hand_from_landmarks(result.hand_landmarks[0], result.hand_world_landmarks[0])
-                        if result.hand_landmarks else None)
+                hand = hand_from_landmarks(result.hand_landmarks[0]) if result.hand_landmarks else None
                 for event in detector.update(t, hand):
                     self._on_event(event)
                 if self._on_frame:
@@ -352,8 +309,7 @@ def debug():
         stamps.append(now)
         fps = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 else 0
         record.write(json.dumps({"t": now, "hand": hand and [round(hand.x, 4), round(hand.y, 4),
-                                                             round(hand.size, 4), hand.pose,
-                                                             hand.pointing, round(hand.bend, 1)]}) + "\n")
+                                                             round(hand.size, 4), hand.open]}) + "\n")
         h, w = frame.shape[:2]
         for points in result.hand_landmarks:
             for p in points:
@@ -366,11 +322,10 @@ def debug():
         cv2.putText(frame, f"{fps:4.1f} fps  window dx {dx:+.2f} dy {dy:+.2f} (need {SWIPE_DISTANCE})",
                     (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         if hand:
-            color = (0, 0, 255) if detector.palm else (0, 200, 0) if hand.open else (
-                (255, 160, 0) if hand.pointing else (160, 160, 160))
+            color = (0, 0, 255) if detector.palm else (0, 200, 0) if hand.open else (160, 160, 160)
             cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 12, color, 2)
             label = result.gestures[0][0].category_name if result.gestures else ""
-            cv2.putText(frame, f"size {hand.size:.2f} {hand.pose} bend {hand.bend:.0f} {label}", (10, 24),
+            cv2.putText(frame, f"size {hand.size:.2f} open {hand.open} {label}", (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         if detector.palm:
             cv2.putText(frame, "LISTENING", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)

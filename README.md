@@ -45,13 +45,13 @@ frame when no hand has been seen for 2 s).
 | gesture | does |
 |---|---|
 | hold an open palm still ~0.35 s | start listening (same as holding right ⌥); lower the hand or close it to send |
-| two-finger swipe up while listening | send, and open the app that best fits what you said |
-| two-finger swipe up | open the app staged by your last fuzzy request; otherwise Mission Control |
-| two-finger swipe left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
-| two-finger swipe down | minimize the front window |
+| swipe up while listening | send, and open the app that best fits what you said |
+| swipe up | open the app staged by your last fuzzy request; otherwise Mission Control |
+| swipe left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
+| swipe down | minimize the front window |
 
-Swipes use index and middle finger out, ring and pinky curled, tracked at the
-fingertips; an open hand never swipes, so raising a palm to talk can't switch desktops.
+Swipes are big whole-hand moves, at least a quarter of the frame in under half a second,
+measured at the palm in any hand shape, so curling your fingers or a small flick does nothing.
 A stroke that comes straight back from an unfinished one in the other direction is ignored.
 
 Clear commands still run as soon as you stop talking. Requests that aren't commands but
