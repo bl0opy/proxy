@@ -1,10 +1,10 @@
 import unittest
-
 from types import SimpleNamespace
 
 from proxy.gesture import Detector, Hand, hand_from_landmarks
 
 FPS = 30
+PINCHED, RELEASED = 0.1, 1.0
 
 
 def run(detector: Detector, path, t0: float = 0.0) -> tuple[list[str], float]:
@@ -15,112 +15,122 @@ def run(detector: Detector, path, t0: float = 0.0) -> tuple[list[str], float]:
     return events, t
 
 
-def hold(x, y, seconds, open_=True):
-    return [Hand(x, y, 0.15, open_)] * int(seconds * FPS)
+def hold(x, y, seconds, open_=True, gap=RELEASED):
+    return [Hand(x, y, 0.15, open_, gap)] * int(seconds * FPS)
 
 
-def move(x0, y0, x1, y1, seconds, open_=True):
+def move(x0, y0, x1, y1, seconds, open_=False, gap=PINCHED):
     n = int(seconds * FPS)
-    return [Hand(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, 0.15, open_) for i in range(n + 1)]
+    return [Hand(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, 0.15, open_, gap) for i in range(n + 1)]
+
+
+def pinch(x, y, seconds=0.2):
+    return hold(x, y, seconds, False, PINCHED)
+
+
+def release(x, y, seconds=0.2):
+    return hold(x, y, seconds, False)
 
 
 def gone(seconds):
     return [None] * int(seconds * FPS)
 
 
-class DetectorTest(unittest.TestCase):
-    def test_palm_hold_starts_and_lowering_ends(self):
+class PalmTest(unittest.TestCase):
+    def test_hold_starts_and_lowering_ends(self):
         d = Detector()
         events, t = run(d, hold(0.5, 0.4, 0.8))
         self.assertEqual(events, ["palm_start"])
-        events, _ = run(d, move(0.5, 0.4, 0.5, 0.95, 0.2) + gone(0.5), t)
+        events, _ = run(d, move(0.5, 0.4, 0.5, 0.95, 0.2, True, RELEASED) + gone(0.5), t)
         self.assertEqual(events, ["palm_end"])
 
-    def test_swipes(self):
-        for path, expected in [((0.3, 0.4, 0.7, 0.4), "swipe_right"), ((0.7, 0.4, 0.3, 0.4), "swipe_left"),
-                               ((0.5, 0.6, 0.5, 0.2), "swipe_up")]:
-            d = Detector()
-            _, t = run(d, hold(*path[:2], 0.3, False))
-            events, _ = run(d, move(*path, 0.2) + hold(*path[2:], 0.1, False), t)
-            self.assertEqual(events, [expected], expected)
-
-    def test_swipe_down_needs_hand_to_stay(self):
-        d = Detector()
-        _, t = run(d, hold(0.5, 0.3, 0.3, False))
-        events, _ = run(d, move(0.5, 0.3, 0.5, 0.7, 0.2) + hold(0.5, 0.7, 0.3, False), t)
-        self.assertEqual(events, ["swipe_down"])
-
-        d = Detector()
-        _, t = run(d, hold(0.5, 0.3, 0.3, False))
-        events, _ = run(d, move(0.5, 0.3, 0.5, 0.95, 0.2) + gone(0.5), t)
+    def test_small_background_hand_is_ignored(self):
+        events, _ = run(Detector(), [Hand(0.5, 0.4, 0.03, True)] * 30)
         self.assertEqual(events, [])
 
-    def test_raising_hand_into_frame_is_not_swipe_up(self):
-        d = Detector()
-        events, _ = run(d, gone(0.5) + move(0.5, 0.95, 0.5, 0.4, 0.15) + hold(0.5, 0.4, 0.1))
-        self.assertNotIn("swipe_up", events)
-
-    def test_swipe_during_palm_ends_it_and_needs_rearm(self):
+    def test_pinch_drag_up_while_listening_swipes_without_palm_end(self):
         d = Detector()
         events, t = run(d, hold(0.5, 0.4, 0.8))
         self.assertEqual(events, ["palm_start"])
-        events, t = run(d, move(0.5, 0.4, 0.5, 0.1, 0.2) + hold(0.5, 0.1, 1.0, False), t)
+        events, _ = run(d, pinch(0.5, 0.4, 0.4) + move(0.5, 0.4, 0.5, 0.2, 0.2), t)
         self.assertEqual(events, ["swipe_up"])
-        events, t = run(d, hold(0.5, 0.1, 0.5, False) + hold(0.5, 0.1, 0.8), t)
+
+    def test_no_accidental_listen_after_swipe_until_hand_rests(self):
+        d = Detector()
+        events, t = run(d, pinch(0.5, 0.5) + move(0.5, 0.5, 0.8, 0.5, 0.2) + hold(0.8, 0.5, 1.0))
+        self.assertEqual(events, ["swipe_right"])
+        events, _ = run(d, gone(0.5) + hold(0.8, 0.5, 0.8), t)
         self.assertEqual(events, ["palm_start"])
 
-    def test_return_stroke_is_ignored(self):
-        d = Detector()
-        _, t = run(d, hold(0.3, 0.4, 0.3, False))
-        events, _ = run(d, move(0.3, 0.4, 0.7, 0.4, 0.2) + move(0.7, 0.4, 0.3, 0.4, 0.3) + hold(0.3, 0.4, 0.2, False), t)
+
+class DragTest(unittest.TestCase):
+    def test_four_directions(self):
+        for end, expected in [((0.8, 0.5), "swipe_right"), ((0.2, 0.5), "swipe_left"),
+                              ((0.5, 0.2), "swipe_up"), ((0.5, 0.8), "swipe_down")]:
+            events, _ = run(Detector(), pinch(0.5, 0.5) + move(0.5, 0.5, *end, 0.3))
+            self.assertEqual(events, [expected], expected)
+
+    def test_one_swipe_per_pinch(self):
+        path = pinch(0.2, 0.5) + move(0.2, 0.5, 0.8, 0.5, 0.5) + move(0.8, 0.5, 0.2, 0.5, 0.5)
+        events, _ = run(Detector(), path)
         self.assertEqual(events, ["swipe_right"])
 
-    def test_slow_return_after_swipe_is_ignored(self):
-        d = Detector()
-        _, t = run(d, hold(0.3, 0.4, 0.3, False))
-        events, _ = run(d, move(0.3, 0.4, 0.7, 0.4, 0.2) + hold(0.7, 0.4, 0.4, False)
-                        + move(0.7, 0.4, 0.3, 0.4, 0.3) + hold(0.3, 0.4, 0.2, False), t)
-        self.assertEqual(events, ["swipe_right"])
-
-    def test_same_direction_twice(self):
-        d = Detector()
-        _, t = run(d, hold(0.2, 0.4, 0.3, False))
-        path = move(0.2, 0.4, 0.5, 0.4, 0.2) + hold(0.5, 0.4, 0.4, False) + move(0.5, 0.4, 0.8, 0.4, 0.2)
-        events, _ = run(d, path + hold(0.8, 0.4, 0.1, False), t)
+    def test_moving_back_released_does_nothing_and_next_pinch_works(self):
+        path = (pinch(0.3, 0.5) + move(0.3, 0.5, 0.6, 0.5, 0.2) + release(0.6, 0.5)
+                + move(0.6, 0.5, 0.3, 0.5, 0.2, False, RELEASED) + pinch(0.3, 0.5)
+                + move(0.3, 0.5, 0.6, 0.5, 0.2))
+        events, _ = run(Detector(), path)
         self.assertEqual(events, ["swipe_right", "swipe_right"])
 
-    def test_closed_hand_swipes_but_does_not_listen(self):
-        d = Detector()
-        _, t = run(d, hold(0.3, 0.4, 0.8, False))
-        events, _ = run(d, move(0.3, 0.4, 0.7, 0.4, 0.2, False) + hold(0.7, 0.4, 0.1, False), t)
+    def test_big_move_without_pinch_does_nothing(self):
+        path = release(0.2, 0.5) + move(0.2, 0.5, 0.8, 0.5, 0.2, False, RELEASED)
+        events, _ = run(Detector(), path)
+        self.assertEqual(events, [])
+
+    def test_short_drag_does_nothing(self):
+        events, _ = run(Detector(), pinch(0.5, 0.5) + move(0.5, 0.5, 0.58, 0.5, 0.2) + release(0.58, 0.5))
+        self.assertEqual(events, [])
+
+    def test_diagonal_does_nothing(self):
+        events, _ = run(Detector(), pinch(0.5, 0.5) + move(0.5, 0.5, 0.65, 0.65, 0.2) + release(0.65, 0.65))
+        self.assertEqual(events, [])
+
+    def test_single_pinch_frame_does_not_start(self):
+        path = release(0.3, 0.5) + [Hand(0.3, 0.5, 0.15, False, PINCHED)] + move(0.3, 0.5, 0.7, 0.5, 0.2, False, RELEASED)
+        events, _ = run(Detector(), path)
+        self.assertEqual(events, [])
+
+    def test_gap_between_thresholds_keeps_pinch(self):
+        path = pinch(0.3, 0.5) + move(0.3, 0.5, 0.6, 0.5, 0.2, False, 0.4)
+        events, _ = run(Detector(), path)
         self.assertEqual(events, ["swipe_right"])
 
-    def test_small_move_is_not_swipe(self):
+    def test_brief_tracking_dropout_keeps_pinch(self):
+        path = pinch(0.3, 0.5) + gone(0.1) + move(0.3, 0.5, 0.6, 0.5, 0.2)
+        events, _ = run(Detector(), path)
+        self.assertEqual(events, ["swipe_right"])
+
+    def test_losing_hand_ends_pinch(self):
         d = Detector()
-        _, t = run(d, hold(0.4, 0.4, 0.3, False))
-        events, _ = run(d, move(0.4, 0.4, 0.55, 0.4, 0.2, False) + hold(0.55, 0.4, 0.3, False), t)
-        self.assertEqual(events, [])
+        run(d, pinch(0.3, 0.5) + gone(0.5))
+        self.assertFalse(d.pinching)
 
-    def test_curling_fingers_does_not_move_the_hand(self):
-        def points(tip_y):
-            ys = [0.8] * 21
-            for tip in (8, 12, 16, 20):
-                ys[tip] = tip_y
-            return [SimpleNamespace(x=0.5, y=y) for y in ys]
 
-        self.assertEqual(hand_from_landmarks(points(0.3)).y, hand_from_landmarks(points(0.7)).y)
+class LandmarksTest(unittest.TestCase):
+    def points(self, thumb_x, tip_y=0.3):
+        points = [SimpleNamespace(x=0.5, y=0.8, z=0.0) for _ in range(21)]
+        points[9] = SimpleNamespace(x=0.5, y=0.6, z=0.0)
+        points[4] = SimpleNamespace(x=thumb_x, y=0.4, z=0.0)
+        points[8] = SimpleNamespace(x=0.5, y=0.4, z=0.0)
+        points[12] = SimpleNamespace(x=0.5, y=tip_y, z=0.0)
+        return points
 
-    def test_return_from_slow_down_is_not_swipe_up(self):
-        d = Detector()
-        _, t = run(d, hold(0.6, 0.45, 0.3, False))
-        events, _ = run(d, move(0.6, 0.45, 0.6, 0.8, 1.0, False) + move(0.6, 0.8, 0.6, 0.45, 0.2, False)
-                        + hold(0.6, 0.45, 0.3, False), t)
-        self.assertNotIn("swipe_up", events)
+    def test_gap_is_relative_to_hand_size(self):
+        self.assertAlmostEqual(hand_from_landmarks(self.points(0.52)).gap, 0.1)
+        self.assertAlmostEqual(hand_from_landmarks(self.points(0.7)).gap, 1.0)
 
-    def test_small_background_hand_is_ignored(self):
-        d = Detector()
-        events, _ = run(d, [Hand(0.5, 0.4, 0.03, True)] * 30)
-        self.assertEqual(events, [])
+    def test_finger_tips_do_not_move_the_tracked_point(self):
+        self.assertEqual(hand_from_landmarks(self.points(0.5, 0.3)).y, hand_from_landmarks(self.points(0.5, 0.7)).y)
 
 
 if __name__ == "__main__":

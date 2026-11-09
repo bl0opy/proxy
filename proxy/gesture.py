@@ -11,26 +11,20 @@ MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/gesture_recognizer
              "gesture_recognizer/float16/latest/gesture_recognizer.task")
 
 MIN_SIZE = 0.07
-SWIPE_WINDOW = 0.45
-SWIPE_DISTANCE = 0.25
+PINCH_ON = 0.3
+PINCH_OFF = 0.5
+PINCH_FRAMES = 2
+DRAG_DISTANCE = 0.12
 AXIS_RATIO = 1.6
-RETURN_LOOKBACK = 0.6
-RETURN_FRACTION = 0.6
-COOLDOWN = 0.5
-RETURN_GUARD = 1.2
-OPPOSITE = {"swipe_left": "swipe_right", "swipe_right": "swipe_left",
-            "swipe_up": "swipe_down", "swipe_down": "swipe_up"}
-ENTRY_SETTLE = 0.25
-DOWN_CONFIRM = 0.2
-EXIT_EDGE = 0.85
 HOLD_SECONDS = 0.35
 HOLD_DRIFT = 0.035
+STILL_WINDOW = 0.2
 LOST_SECONDS = 0.25
 IDLE_AFTER = 2.0
 IDLE_EVERY = 5
 
 FINGERS = ((8, 6), (12, 10), (16, 14), (20, 18))
-WRIST, MIDDLE_KNUCKLE = 0, 9
+WRIST, THUMB_TIP, INDEX_TIP, MIDDLE_KNUCKLE = 0, 4, 8, 9
 PALM = (0, 5, 9, 13, 17)
 
 
@@ -40,6 +34,7 @@ class Hand:
     y: float
     size: float
     open: bool
+    gap: float = 1.0
 
 
 @dataclass
@@ -49,130 +44,103 @@ class Sample:
     y: float
 
 
-def hand_from_landmarks(points) -> Hand:
-    def dist(a, b):
-        return math.hypot(points[a].x - points[b].x, points[a].y - points[b].y)
+def distance(points, a: int, b: int, axes: str) -> float:
+    return math.dist([getattr(points[a], c) for c in axes], [getattr(points[b], c) for c in axes])
 
-    extended = sum(dist(WRIST, tip) > 1.1 * dist(WRIST, pip) for tip, pip in FINGERS)
+
+def hand_from_landmarks(points, world=None) -> Hand:
+    size = distance(points, WRIST, MIDDLE_KNUCKLE, "xy")
+    extended = sum(distance(points, WRIST, tip, "xy") > 1.1 * distance(points, WRIST, pip, "xy")
+                   for tip, pip in FINGERS)
     x = sum(points[i].x for i in PALM) / len(PALM)
     y = sum(points[i].y for i in PALM) / len(PALM)
-    return Hand(x, y, dist(WRIST, MIDDLE_KNUCKLE), extended >= 4)
+    source, axes = (world, "xyz") if world else (points, "xy")
+    span = distance(source, WRIST, MIDDLE_KNUCKLE, axes)
+    gap = distance(source, THUMB_TIP, INDEX_TIP, axes) / span if span else 1.0
+    return Hand(x, y, size, extended >= 4, gap)
 
 
 class Detector:
-    """Turns a stream of hand positions (mirrored, 0–1, y down) into events:
-    palm_start / palm_end for a held open palm, and swipe_left/right/up/down for a
-    large whole-hand move, in any hand shape. A swipe during a palm hold ends it without a palm_end, except
-    a downward one, which is read as lowering the hand. Pure logic, no camera."""
-
     def __init__(self):
         self.track: deque[Sample] = deque()
         self.palm = False
         self.armed = True
-        self.cooldown_until = 0.0
-        self.appeared_at = 0.0
         self.last_seen = -math.inf
         self.last_open = -math.inf
         self.still_since: float | None = None
-        self.pending_down: float | None = None
-        self.last_swipe = ""
-        self.last_swipe_at = -math.inf
+        self.pinching = False
+        self.pinch_frames = 0
+        self.anchor: tuple[float, float] | None = None
+        self.fired = False
+        self.released_at = -math.inf
 
     def update(self, t: float, hand: Hand | None) -> list[str]:
-        events = []
         visible = hand is not None and hand.size >= MIN_SIZE
         if visible:
-            if t - self.last_seen > LOST_SECONDS:
-                self.appeared_at = t
-                self.track.clear()
             self.last_seen = t
             self.track.append(Sample(t, hand.x, hand.y))
-            if hand.open:
-                self.last_open = t
-        while self.track and t - self.track[0].t > SWIPE_WINDOW + RETURN_LOOKBACK:
+        while self.track and t - self.track[0].t > STILL_WINDOW:
             self.track.popleft()
 
-        if self.pending_down is not None:
-            if (visible and hand.y >= EXIT_EDGE) or t - self.last_seen > DOWN_CONFIRM:
-                self.pending_down = None
-            elif visible and t - self.pending_down >= DOWN_CONFIRM:
-                self.pending_down = None
-                events.append("swipe_down")
-                return events
+        self._update_pinch(t, hand if visible else None)
+        is_open = visible and hand.open and not self.pinching and hand.gap > PINCH_OFF
+        if is_open or (self.palm and self.pinching):
+            self.last_open = t
 
-        if swipe := self._swipe(t):
-            self.last_swipe, self.last_swipe_at = swipe, t
-            self.track.clear()
-            self.still_since = None
-            self.cooldown_until = t + COOLDOWN
-            self.armed = False
-            if swipe == "swipe_down":
-                if self.palm:
-                    self.palm = False
-                    events.append("palm_end")
-                else:
-                    self.pending_down = t
-                return events
+        if visible and self.pinching and not self.fired and (swipe := self._drag(hand)):
+            self.fired = True
             self.palm = False
-            events.append(swipe)
-            return events
+            self.armed = False
+            self.still_since = None
+            return [swipe]
 
         if t - self.last_open > LOST_SECONDS:
-            if self.palm:
-                self.palm = False
-                events.append("palm_end")
+            events = ["palm_end"] if self.palm else []
+            self.palm = False
             self.still_since = None
-            self.armed = True
+            if not self.pinching and t - self.released_at > LOST_SECONDS:
+                self.armed = True
             return events
 
-        if visible and hand.open and self.armed and not self.palm and t >= self.cooldown_until:
-            if self._still(t):
+        if is_open and self.armed and not self.palm:
+            if self._still():
                 self.still_since = self.still_since or t
                 if t - self.still_since >= HOLD_SECONDS:
                     self.palm = True
                     self.armed = False
-                    events.append("palm_start")
+                    return ["palm_start"]
             else:
                 self.still_since = None
-        return events
+        return []
 
-    def _still(self, t: float) -> bool:
-        recent = [s for s in self.track if t - s.t <= 0.2]
-        if len(recent) < 2:
+    def _update_pinch(self, t: float, hand: Hand | None):
+        if self.pinching:
+            released = hand.gap > PINCH_OFF if hand else t - self.last_seen > LOST_SECONDS
+            if released:
+                self.pinching = False
+                self.pinch_frames = 0
+                self.anchor = None
+                self.released_at = t
+            return
+        self.pinch_frames = self.pinch_frames + 1 if hand and hand.gap < PINCH_ON else 0
+        if self.pinch_frames >= PINCH_FRAMES:
+            self.pinching = True
+            self.fired = False
+            self.anchor = (hand.x, hand.y)
+
+    def _drag(self, hand: Hand) -> str | None:
+        dx, dy = hand.x - self.anchor[0], hand.y - self.anchor[1]
+        if abs(dx) >= DRAG_DISTANCE and abs(dx) >= AXIS_RATIO * abs(dy):
+            return "swipe_right" if dx > 0 else "swipe_left"
+        if abs(dy) >= DRAG_DISTANCE and abs(dy) >= AXIS_RATIO * abs(dx):
+            return "swipe_down" if dy > 0 else "swipe_up"
+        return None
+
+    def _still(self) -> bool:
+        if len(self.track) < 2:
             return False
-        last = recent[-1]
-        return all(math.hypot(s.x - last.x, s.y - last.y) < HOLD_DRIFT for s in recent)
-
-    def _swipe(self, t: float) -> str | None:
-        if t < self.cooldown_until:
-            return None
-        since = max(self.appeared_at + ENTRY_SETTLE, self.cooldown_until, t - SWIPE_WINDOW)
-        window = [s for s in self.track if s.t >= since]
-        if len(window) < 3:
-            return None
-        dx = window[-1].x - window[0].x
-        dy = window[-1].y - window[0].y
-        if abs(dx) >= SWIPE_DISTANCE and abs(dx) >= AXIS_RATIO * abs(dy):
-            axis, move, swipe = "x", dx, "swipe_right" if dx > 0 else "swipe_left"
-        elif abs(dy) >= SWIPE_DISTANCE and abs(dy) >= AXIS_RATIO * abs(dx):
-            axis, move, swipe = "y", dy, "swipe_down" if dy > 0 else "swipe_up"
-        else:
-            return None
-        if self.last_swipe == OPPOSITE[swipe] and t - self.last_swipe_at < RETURN_GUARD:
-            return None
-        return None if self._returning(window[0], axis, move) else swipe
-
-    def _returning(self, start: Sample, axis: str, move: float) -> bool:
-        """True when the hand travelled the other way just before this stroke: it's the
-        way back from a swipe that didn't fire, not a new one."""
-        values = [getattr(s, axis) for s in self.track if s.t >= start.t - RETURN_LOOKBACK]
-        if move < 0:
-            peak = values.index(max(values))
-            travel = values[peak] - min(values[: peak + 1])
-        else:
-            peak = values.index(min(values))
-            travel = max(values[: peak + 1]) - values[peak]
-        return travel >= RETURN_FRACTION * SWIPE_DISTANCE
+        last = self.track[-1]
+        return all(math.hypot(s.x - last.x, s.y - last.y) < HOLD_DRIFT for s in self.track)
 
 
 def ensure_model():
@@ -275,7 +243,8 @@ class Camera:
                 ms = max(last_ms + 1, int((t - start) * 1000))
                 last_ms = ms
                 result = recognizer.recognize_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ms)
-                hand = hand_from_landmarks(result.hand_landmarks[0]) if result.hand_landmarks else None
+                hand = (hand_from_landmarks(result.hand_landmarks[0], result.hand_world_landmarks[0])
+                        if result.hand_landmarks else None)
                 for event in detector.update(t, hand):
                     self._on_event(event)
                 if self._on_frame:
@@ -309,23 +278,23 @@ def debug():
         stamps.append(now)
         fps = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 else 0
         record.write(json.dumps({"t": now, "hand": hand and [round(hand.x, 4), round(hand.y, 4),
-                                                             round(hand.size, 4), hand.open]}) + "\n")
+                                                             round(hand.size, 4), hand.open, round(hand.gap, 3)]}) + "\n")
         h, w = frame.shape[:2]
         for points in result.hand_landmarks:
             for p in points:
                 cv2.circle(frame, (int(p.x * w), int(p.y * h)), 3, (255, 255, 255), -1)
-        track = list(detector.track)
-        for a, b in zip(track, track[1:]):
-            cv2.line(frame, (int(a.x * w), int(a.y * h)), (int(b.x * w), int(b.y * h)), (0, 200, 255), 2)
-        dx = track[-1].x - track[0].x if track else 0
-        dy = track[-1].y - track[0].y if track else 0
-        cv2.putText(frame, f"{fps:4.1f} fps  window dx {dx:+.2f} dy {dy:+.2f} (need {SWIPE_DISTANCE})",
-                    (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        status = f"{fps:4.1f} fps"
+        if hand and detector.anchor:
+            ax, ay = detector.anchor
+            cv2.line(frame, (int(ax * w), int(ay * h)), (int(hand.x * w), int(hand.y * h)), (0, 200, 255), 3)
+            status += f"  drag dx {hand.x - ax:+.2f} dy {hand.y - ay:+.2f} (need {DRAG_DISTANCE})"
+        cv2.putText(frame, status, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         if hand:
-            color = (0, 0, 255) if detector.palm else (0, 200, 0) if hand.open else (160, 160, 160)
+            color = (0, 200, 255) if detector.pinching else (0, 0, 255) if detector.palm else (
+                (0, 200, 0) if hand.open else (160, 160, 160))
             cv2.circle(frame, (int(hand.x * w), int(hand.y * h)), 12, color, 2)
             label = result.gestures[0][0].category_name if result.gestures else ""
-            cv2.putText(frame, f"size {hand.size:.2f} open {hand.open} {label}", (10, 24),
+            cv2.putText(frame, f"size {hand.size:.2f} gap {hand.gap:.2f} open {hand.open} {label}", (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         if detector.palm:
             cv2.putText(frame, "LISTENING", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)

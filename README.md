@@ -45,18 +45,18 @@ frame when no hand has been seen for 2 s).
 | gesture | does |
 |---|---|
 | hold an open palm still ~0.35 s | start listening (same as holding right ⌥); lower the hand or close it to send |
-| swipe up while listening | send, and open the app that best fits what you said |
-| swipe up | open the app staged by your last fuzzy request; otherwise Mission Control |
-| swipe left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
-| swipe down | minimize the front window |
+| pinch, drag up while listening | send, and open the app that best fits what you said |
+| pinch, drag up | open the app staged by your last fuzzy request; otherwise Mission Control |
+| pinch, drag left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
+| pinch, drag down | minimize the front window |
 
-Swipes are big whole-hand moves, at least a quarter of the frame in under half a second,
-measured at the palm in any hand shape, so curling your fingers or a small flick does nothing.
-A stroke that comes straight back from an unfinished one in the other direction is ignored.
+A drag is thumb and index pinched while the whole hand moves about an eighth of the frame.
+Each pinch fires once and moving back with the fingers apart does nothing, like lifting a
+finger off a trackpad. Motion is measured at the palm and the pinch from 3D hand landmarks.
 
 Clear commands still run as soon as you stop talking. Requests that aren't commands but
 point at an app ("time to write some lyrics") are staged instead: the pill shows
-`↑ … · open Notes` for 15 s and a swipe up opens it. The best-fit app is one more
+`↑ … · open Notes` for 15 s and a pinch-drag up opens it. The best-fit app is one more
 question in the same Jev request (`bench/fit_eval.py`: 18/18, ~100 ms).
 
 While you talk, whatever is playing is quieted: the output volume drops to 10% when the
