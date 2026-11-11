@@ -1,110 +1,140 @@
 # proxy
 
-A fast, general-purpose voice assistant for macOS. A System One model decides what an
-utterance means; code does the rest.
+Hands-free control for macOS. Pinch the air to switch desktops, raise a palm and talk to
+open the right app, all from the webcam and mic you already have.
 
-## Router
+A small "System One" model decides what you meant; plain code does the rest. Everything
+runs locally except one short routing request.
 
-One [Jev](https://docs.typesafe.ai) request per utterance answers four questions at once:
-the intent, which app, which media action, and which window action. A keyword fast path
-answers exact commands ("skip", "open slack") without a network call. Answers under 0.7
-confidence come back flagged `confident: false` so the caller can ask instead of act.
+```
+ webcam ─▶ MediaPipe hand landmarks ─▶ gesture detector ─┐
+                                                         ├─▶ action layer ─▶ macOS
+ mic ─▶ parakeet STT (on device) ─▶ Jev router ──────────┘   (PyObjC: apps, windows,
+                                                               desktops, media, typing)
+```
 
-## Actions
+## What it does
 
-Each confident route becomes one action, run in-process through PyObjC:
-
-| intent | action |
-|---|---|
-| `open_app` | launch / focus the app (async, ~0.5 ms to return) |
-| `type_text` | paste the spoken text into the focused field, then restore the clipboard |
-| `web_search` | open a spoken URL ("github dot com") or a Google search |
-| `media_control` | system media keys for play/pause/next/previous; volume and mute via AppleScript |
-| `window_management` | tile left/right/maximize, minimize, fullscreen, close via the Accessibility API |
-| `rewrite_selection`, `calendar_reminder`, `ask_question`, `escalate_complex` | not built yet (System 2) |
-
-## Voice
-
-Hold right ⌥, speak, let go. The mic stays open with a 300 ms pre-roll so the first
-syllable isn't clipped; only audio while the key is held is kept. parakeet-tdt-0.6b-v3
-(MLX) transcribes on device, then the router and action layer take over. The frontmost
-app and selection are captured when the key goes down, so the action lands where you were.
-Release to done is ~200–350 ms (stt 65–170, Jev ~130, fast path 0).
-
-A floating pill at the top of the screen shows what's happening: a red dot and a
-dot-matrix level meter while you hold the key, the transcript while it thinks, then the
-action and total time. White dot = done, amber = unsure or refused (not acted on),
-red = failed. It never takes focus or clicks, so the app you spoke into stays active.
-`python -m proxy.overlay` plays a short demo.
-
-## Gestures
-
-The webcam watches for one hand (MediaPipe gesture recognizer, ~14 ms a frame, every 5th
-frame when no hand has been seen for 2 s).
+**Gestures** (webcam, one hand)
 
 | gesture | does |
 |---|---|
-| hold an open palm still ~0.35 s | start listening (same as holding right ⌥); lower the hand or close it to send |
+| pinch, drag left / right | switch desktop |
+| pinch, drag up | open the app staged by your last request → else restore the last minimized window → else Mission Control |
+| pinch, drag down | leave Mission Control if it's open → else minimize the front window |
+| hold an open palm still ~0.35 s | start listening; lower or close the hand to send |
 | pinch, drag up while listening | send, and open the app that best fits what you said |
-| pinch, drag up | open the app staged by your last fuzzy request; otherwise bring back the last minimized window; otherwise Mission Control |
-| pinch, drag left / right | switch desktop (needs the Mission Control shortcuts on in Keyboard settings) |
-| pinch, drag down | leave Mission Control if it's open; otherwise minimize the front window |
 
-A drag is thumb and index pinched while the whole hand moves about an eighth of the frame.
-Each pinch fires once and moving back with the fingers apart does nothing, like lifting a
-finger off a trackpad. Motion is measured at the palm and the pinch from 3D hand landmarks.
+A drag is thumb and index pinched while the whole hand moves. Each pinch fires once, and
+moving back with your fingers apart does nothing, like lifting a finger off a trackpad.
 
-Clear commands still run as soon as you stop talking. Requests that aren't commands but
-point at an app ("time to write some lyrics") are staged instead: the pill shows
-`↑ … · open Notes` for 15 s and a pinch-drag up opens it. The best-fit app is one more
-question in the same Jev request (`bench/fit_eval.py`: 18/18, ~100 ms).
+**Voice** (hold right ⌥, or raise a palm)
 
-While you talk, whatever is playing is quieted: the output volume drops to 10% when the
-device has a volume control; otherwise (audio interfaces with a hardware knob) Spotify or
-Music is paused, or play/pause is sent when a browser is the one playing. It comes back
-when the request is routed, unless the request was itself play or pause.
+| say | happens |
+|---|---|
+| "open slack", "skip", "pause" | runs immediately |
+| "put this window on the left half" | tiles the window you were in |
+| "github dot com", "search mediapipe docs" | opens the URL or a search |
+| "type see you at five" | pastes into the focused field |
+| "time to write some lyrics" | stages **Notes** in the pill for 15 s; pinch-drag up opens it |
 
-`python -m proxy.gesture` opens a debug view with the hand points and detected events,
-for tuning the thresholds at the top of `proxy/gesture.py`; it records every frame to
-`gesture-log.jsonl`. `--no-gestures` turns the
-camera off; the menu bar item toggles it. The model (`models/gesture_recognizer.task`,
-8 MB) downloads on first run.
+While you talk, whatever is playing is quieted (volume drops to 10%, or Spotify / Music /
+the browser is paused on interfaces without a software volume) and comes back afterwards.
 
-## Proxy.app
+A floating pill at the top of the screen shows state: listening with a level meter, the
+transcript while it thinks, then the result and total time. It never takes focus.
 
-```bash
-./scripts/build_app.sh        # → build/Proxy.app
-open build/Proxy.app
-```
+## How it works
 
-A menu bar app (no Dock icon, no terminal). The bundle's executable is a tiny C launcher
-that spawns the venv's Python as a child, so macOS grants permissions to **Proxy**, not to
-Terminal. Python code changes need no rebuild: the app runs the project in place. Output
-goes to `~/Library/Logs/Proxy/proxy.log`. The menu bar item shows missing permissions,
-toggles dry run, opens the log, restarts, and quits.
+**Hand tracking.** MediaPipe's hand model gives 21 landmarks per frame (~14 ms). Motion is
+measured at the palm centre, so curling fingers doesn't move the cursor point. The pinch
+is the 3D thumb–index distance relative to hand size, with hysteresis (on below 0.3, off
+above 0.5) and a 3-frame release debounce so motion blur doesn't drop a pinch mid-drag.
+When no hand has been seen for 2 s, only every 5th frame is processed.
 
-Rebuilding re-signs the bundle ad hoc, which can make macOS forget its permissions; only
-rebuild when `app/` changes.
+**Tuning from data.** `python -m proxy.gesture` opens a debug view and records every frame
+to `gesture-log.jsonl`. Sessions replay offline through the detector, so threshold changes
+are checked against real recordings rather than by feel.
 
-## Permissions
+**Speech.** Push-to-talk with a 300 ms pre-roll so the first syllable isn't clipped.
+[parakeet-tdt-0.6b-v3](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3) (MLX)
+transcribes on device in 65–170 ms.
 
-Proxy.app (or the terminal, when run from one) needs, in System Settings → Privacy & Security:
-**Microphone** (voice), **Camera** (gestures), **Input Monitoring** (the hotkey) and **Accessibility** (typing,
-windows, media keys, reading the selection). `python -m proxy --request-access` raises the
-prompts.
+**Routing.** One [Jev](https://docs.typesafe.ai) request per utterance answers five
+questions at once: intent, app, media action, window action, and the best-fit app for
+fuzzy requests. A keyword fast path answers exact commands with no network call. Answers
+under 0.7 confidence are flagged instead of acted on. Release to done is ~200–350 ms.
+
+**Actions.** Everything runs in-process through PyObjC: NSWorkspace for apps, the
+Accessibility API for windows, CGEvents for keys and desktops, CoreAudio for ducking.
+
+## Setup
+
+Requires macOS on Apple Silicon and Python 3.11.
 
 ```bash
 pyenv local 3.11.6 && python -m venv .venv && .venv/bin/pip install -r requirements.txt
 echo "JEV_API_KEY=..." > .env
-.venv/bin/python -m proxy "open calculator"
-.venv/bin/python -m proxy "put this window on the left half" --delay 3   # switch apps first
-.venv/bin/python -m proxy --dry-run                                       # interactive, plan only
-.venv/bin/python -m proxy --listen                                        # push-to-talk
-.venv/bin/python -m proxy --wav clip.aiff --dry-run                       # a recording instead of the mic
+.venv/bin/python -m proxy --request-access     # raises the permission prompts
+.venv/bin/python -m proxy --listen
 ```
 
-## Benchmarks
+The hand model (`models/gesture_recognizer.task`, 8 MB) downloads on first run.
 
-`bench/` holds the model comparison that led here (nimble, Laya, Jev) and the router eval.
-See [bench/RESULTS.md](bench/RESULTS.md). `laya` in `requirements.txt` is only for that
-comparison.
+**Permissions** (System Settings → Privacy & Security): Camera (gestures), Microphone
+(voice), Input Monitoring (the hotkey), Accessibility (windows, typing, media keys).
+Desktop switching needs the Mission Control shortcuts enabled in Keyboard settings.
+
+### Usage
+
+```bash
+.venv/bin/python -m proxy --listen                  # voice + gestures
+.venv/bin/python -m proxy --listen --no-gestures    # voice only
+.venv/bin/python -m proxy "open calculator"         # one command from text
+.venv/bin/python -m proxy --dry-run                 # interactive, plan only
+.venv/bin/python -m proxy.gesture                   # gesture debug view
+.venv/bin/python -m proxy.overlay                   # pill demo
+```
+
+### Proxy.app
+
+```bash
+./scripts/build_app.sh && open build/Proxy.app
+```
+
+A menu bar app with no Dock icon. A tiny C launcher spawns the venv's Python as a child,
+so macOS grants permissions to **Proxy** rather than your terminal. Code changes need no
+rebuild. Logs go to `~/Library/Logs/Proxy/proxy.log`. Rebuilding re-signs the bundle ad
+hoc, which can reset permissions, so only rebuild when `app/` changes.
+
+## Layout
+
+```
+proxy/
+  gesture.py    camera thread, hand landmarks → pinch/palm detector, debug view
+  voice.py      listener: hotkey + palm recording, gesture routing, staging
+  router.py     Jev router, fast path, confidence gate, best-fit app
+  actions.py    intent → action
+  mac.py        PyObjC: apps, windows, desktops, Mission Control, keys
+  ducking.py    CoreAudio volume ducking / pause fallback
+  stt.py        on-device parakeet transcription
+  overlay.py    the floating pill
+  statusbar.py  menu bar item
+bench/          router and model benchmarks (see bench/RESULTS.md)
+tests/          gesture detector and window-stack tests
+```
+
+```bash
+.venv/bin/python -m unittest discover tests
+```
+
+## Roadmap
+
+Moving toward general-purpose hand control:
+
+- A hand cursor with pinch-to-click and snapping, then grabbing and throwing windows
+- An in-view indicator so you know when your hand has left the frame
+- A learned pose and motion classifier, trained on recorded hand sessions, in place of
+  hand-tuned thresholds
+- Benchmarking Apple Vision hand pose against MediaPipe
+- Per-app mappings, like orbiting 3D models in Blender
